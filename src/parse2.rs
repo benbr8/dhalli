@@ -27,6 +27,39 @@ fn vec_to_string(vec: Vec<char>) -> String {
 }
 
 
+
+
+fn local_path() -> impl Parser<char, String, Error = Simple<char>> {
+    let patch_character = filter(|c: &char| {
+        let c: String = c.to_lowercase().collect();
+        "abcdefghijklmnopqrstuvwxyz0123456789!\"#$%&'*+,-.:;=?@^_`|~".contains(&c)
+    });
+    let path_component = just('/')
+        .then(patch_character.repeated().at_least(1))
+        .map(|(first, mut other)| {
+            other.insert(0, first);
+            vec_to_string(other)
+        });
+    let path = path_component.repeated().at_least(1);
+    let here_path = just('.').ignore_then(path)
+        .map(|paths| {
+            let mut s = ".".to_string();
+            for item in paths {
+                s = s + &item;
+            }
+            s
+        });
+        
+    here_path
+}
+
+
+fn import() -> impl Parser<char, Expr, Error = Simple<char>> {
+
+    
+    local_path().map(|path| Expr::Import(Import::Local(path)))
+}
+
 fn base_ws() -> impl Parser<char, (), Error = Simple<char>> {
     filter(|c: &char| c.is_whitespace()).ignored()
 }
@@ -121,6 +154,25 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .ignore_then(just(',').padded().repeated().at_most(1))
             .map(|_| Expr::Record(BTreeMap::new()));
 
+
+        let record_type_entry = recursive(|_| any_label_or_some().padded()
+            .then_ignore(just(':').then(ws1()))
+            .then(expression.clone()));
+
+
+        let non_empty_record_type = record_type_entry.clone()
+            .then(just(',').padded().ignore_then(record_type_entry.clone()).repeated().or_not())
+            .then_ignore(just(',').or_not().padded())
+            .map(|(first, other)| {
+                let mut map = BTreeMap::new();
+                map.insert(first.0, first.1);
+                if let Some(other) = other {
+                    for item in other {
+                        map.insert(item.0, item.1);
+                    }
+                }
+                Expr::RecordType(map)
+            });
             
         let record_literal_normal_entry = just('.').padded().ignore_then(any_label_or_some()).repeated()
             .then_ignore(just('=').padded())
@@ -159,7 +211,8 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 Expr::Record(map)
             });
 
-        let non_empty_record_type_or_literal = non_empty_record_literal; // or type
+        let non_empty_record_type_or_literal =
+            non_empty_record_type.or(non_empty_record_literal);
 
 
         let record_type_or_literal = non_empty_record_type_or_literal; // or empty
@@ -250,23 +303,50 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
 
         // operator expressions
-        let first_application_expression = primitive_expression.clone();
 
-        let application_expression = first_application_expression
-            .then(ws1().ignore_then(primitive_expression.clone()).or_not())
+        let selector = label(); // TODO: or labels or type-selector
+
+        let selector_expression = primitive_expression.clone()
+            .then(just('.').padded().ignore_then(selector).repeated())
+            .map(|(mut expr, sel)| {
+                for s in sel {
+                    expr = Expr::Select(Box::new(expr), s)
+                }
+                expr
+            });
+
+        let completion_expression = selector_expression;
+
+        let import_expression = recursive(|_| import()
+            .or(completion_expression)); // first below application, so referenced a lot
+
+        let first_application_expression = import_expression.clone();
+
+        let application_expression = recursive(|_| first_application_expression
+            .then(ws1().ignore_then(import_expression.clone()).or_not())
             .labelled("application_expression")
             .map(|(e1, e2)| {
                 if let Some(e2) = e2 { Expr::Op(Op::App(Box::new(e1), Box::new(e2)))} else { e1 }
-            });
+            }));
 
-        let annotated_expression = application_expression.padded()
+
+        let operator_expression = recursive(|_| application_expression.clone());
+
+
+
+        // annotated expression
+        let annotated_expression = operator_expression.clone().padded()
             .then(just(':').ignore_then(ws1()).ignore_then(expression.clone()).or_not())
             .map(|(e, t): (Expr, Option<Expr>)| {
                 if let Some(t) = t { Expr::Annot(Box::new(e), Box::new(t)) } else { e }
             });
 
 
-
+        // fn type
+        let fn_type = operator_expression
+            .then_ignore(just("->").padded())
+            .then(expression.clone())
+            .map(|(l, r)| Expr::FnType(Box::new(l), Box::new(r)));
 
 
 
@@ -276,6 +356,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         // expression = 
         let_in
             .or(lambda)
+            .or(fn_type)
             .or(annotated_expression)
     }).padded().then_ignore(end())
 }
