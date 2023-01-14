@@ -20,10 +20,12 @@ pub enum Expr {
     // Some
     Some(Box<Expr>),
 
-    BaseType(BaseType),
     Text(Vec<(String, Option<Expr>)>),
     TextLit(String),
-    Num(Num),
+    BoolLit(bool),
+    NaturalLit(u64),
+    IntegerLit(i64),
+    DoubleLit(f64),
     Builtin(Builtin),
     // let x : t = r in e
     Let(String, Box<Option<Expr>>, Box<Expr>, Box<Expr>),
@@ -60,14 +62,22 @@ pub enum Import {
 #[derive(Debug, Clone)]
 pub enum Op {
     App(Box<Expr>, Box<Expr>),
+    Completion(Box<Expr>, Box<Expr>),
+    Equivalent(Box<Expr>, Box<Expr>),
+    ImportAlt(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
+    Plus(Box<Expr>, Box<Expr>),
+    TextAppend(Box<Expr>, Box<Expr>),
+    ListAppend(Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Combine(Box<Expr>, Box<Expr>),
+    Prefer(Box<Expr>, Box<Expr>),
+    CombineTypes(Box<Expr>, Box<Expr>),
+    Times(Box<Expr>, Box<Expr>),
+    Equal(Box<Expr>, Box<Expr>),
+    NotEqual(Box<Expr>, Box<Expr>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BaseType {
-    Text,
-    Natural,
-    Type,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Builtin {

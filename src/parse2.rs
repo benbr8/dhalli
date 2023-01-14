@@ -72,9 +72,25 @@ fn ws1() -> impl Parser<char, (), Error = Simple<char>> {
     base_ws().repeated().at_least(1).ignored()
 }
 
+
 fn natural() -> impl Parser<char, u64, Error = Simple<char>> {
     text::digits(10).map(|s: String| s.parse::<u64>().unwrap())
 }
+
+fn natural_literal() -> impl Parser<char, Expr, Error = Simple<char>> {
+    // TODO: add hex notation
+    natural().map(|u| Expr::NaturalLit(u))
+}
+
+fn integer_literal() -> impl Parser<char, Expr, Error = Simple<char>> {
+    just('+').or(just('-')).then(natural())
+        .map(|(s, u)| {
+            let mut i = u as i64;
+            if s == '-' { i = -i; }
+            Expr::IntegerLit(i)
+        })
+}
+
 
 
 fn label() -> impl Parser<char, String, Error = Simple<char>> {
@@ -290,32 +306,35 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
         let identifier = variable; // builtin identifiers handled in interpreter?
 
-        let primitive_expression = recursive(|_a: Recursive<char, Expr, Simple<char>>| text_literal
+        let primitive_expression = recursive(|_a: Recursive<char, Expr, Simple<char>>| 
+            text_literal
+            .or(natural_literal())
+            .or(integer_literal())
             .or(record)
             .or(non_empty_list_literal)
             .or(identifier)
-            .or(just('(').padded().ignore_then(expression.clone()).then_ignore(just('(').padded())));
-        
-
-
-
-
-
+            .or(just('(').padded().ignore_then(expression.clone()).then_ignore(just(')').padded())));
 
         // operator expressions
 
         let selector = label(); // TODO: or labels or type-selector
 
-        let selector_expression = primitive_expression.clone()
+        let selector_expression = recursive(|_| primitive_expression.clone()
             .then(just('.').padded().ignore_then(selector).repeated())
             .map(|(mut expr, sel)| {
                 for s in sel {
                     expr = Expr::Select(Box::new(expr), s)
                 }
                 expr
-            });
+            }));
 
-        let completion_expression = selector_expression;
+        let completion_expression = selector_expression.clone()
+            .then(just("::").padded().ignore_then(selector_expression.clone()).or_not())
+            .map(|(e, c)| {
+                if let Some(c) = c {
+                    Expr::Op(Op::Completion(Box::new(e), Box::new(c)))
+                } else { e }
+            });
 
         let import_expression = recursive(|_| import()
             .or(completion_expression)); // first below application, so referenced a lot
@@ -329,8 +348,124 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 if let Some(e2) = e2 { Expr::Op(Op::App(Box::new(e1), Box::new(e2)))} else { e1 }
             }));
 
+        let not_equal_expression = recursive(|_| application_expression.clone()
+            .then(just("!=").padded().ignore_then(application_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::NotEqual(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
 
-        let operator_expression = recursive(|_| application_expression.clone());
+        let equal_expression = recursive(|_| not_equal_expression.clone()
+            .then(just("==").padded().ignore_then(not_equal_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::Equal(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let times_expression = recursive(|_| equal_expression.clone()
+            .then(just("*").padded().ignore_then(equal_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::Times(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let combine_types_expression = recursive(|_| times_expression.clone()
+            .then(just("//\\\\").padded().ignore_then(times_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::CombineTypes(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+            
+        let prefer_expression = recursive(|_| combine_types_expression.clone()
+            .then(just("//").padded().ignore_then(combine_types_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::Prefer(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let combine_expression = recursive(|_| prefer_expression.clone()
+            .then(just("/\\").padded().ignore_then(prefer_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::Combine(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let and_expression = recursive(|_| combine_expression.clone()
+            .then(just("&&").padded().ignore_then(combine_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::And(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let list_append_expression = recursive(|_| and_expression.clone()
+            .then(just("#").padded().ignore_then(and_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::ListAppend(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let text_append_expression = recursive(|_| list_append_expression.clone()
+            .then(just("++").padded().ignore_then(list_append_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::TextAppend(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let plus_expression = recursive(|_| text_append_expression.clone().padded()
+            .then(just("+").ignore_then(ws1()).ignore_then(text_append_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::Plus(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let or_expression = recursive(|_| plus_expression.clone()
+            .then(just("||").padded().ignore_then(plus_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::Or(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let import_alt_expression = recursive(|_| or_expression.clone()
+            .then(just("?").padded().ignore_then(or_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::ImportAlt(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let equivalent_expression = recursive(|_| import_alt_expression.clone()
+            .then(just("===").padded().ignore_then(import_alt_expression.clone()).repeated())
+            .map(|(mut l, vec)| {
+                for r in vec {
+                    l = Expr::Op(Op::Equivalent(Box::new(l), Box::new(r)));
+                }
+                l
+            }));
+
+        let operator_expression = recursive(|_| equivalent_expression);
 
 
 

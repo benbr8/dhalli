@@ -33,6 +33,8 @@ impl Interpreter {
             "Natural" => Some(Expr::Builtin(Builtin::Natural)),
             "Type" => Some(Expr::Builtin(Builtin::Type)),
             "List" => Some(Expr::Builtin(Builtin::List)),
+            "True" => Some(Expr::BoolLit(true)),
+            "False" => Some(Expr::BoolLit(false)),
             _ => None,
         }
     }
@@ -79,6 +81,100 @@ impl Interpreter {
             Ok(())
         } else {
             Err(anyhow!("Expression {lit:?} did not match type {t:?}."))
+        }
+    }
+
+    fn process_op(&mut self, op: &Op) -> Result<Expr> {
+        match op {
+            Op::App(l, r) => {
+                let l = self.visit_expr(l)?;
+                let r = self.visit_expr(r)?;
+                
+                match l {
+                    Expr::Lambda(arg_name, arg_type, body) => {
+                        let r = self.visit_expr(&r)?;
+                        let t = self.visit_expr(&arg_type)?;
+                        self.check_type(&r, &t)?;
+                        self.env.push();
+                        self.env.env.define(arg_name.clone(), r)?;
+                        let result = self.visit_expr(&body);
+                        self.env.pop();
+                        result
+                    },
+                    Expr::Builtin(b) => {
+                        match b {
+                            Builtin::List => Ok(Expr::ListType(Box::new(r))),
+                            _ => todo!("{b:?}")
+                        }
+                    },
+                    _ => todo!("{l:?}")
+                }
+            },
+            Op::TextAppend(l, r) => {
+                let l = self.visit_expr(l)?;
+                let r = self.visit_expr(r)?;
+                match (&l, &r) {
+                    (Expr::TextLit(ls), Expr::TextLit(rs)) => Ok(Expr::TextLit(format!("{ls}{rs}"))),
+                    _ => Err(anyhow!("'++' may only concatenate Text literals. Got {l:?} and {r:?} instead.")),
+                }
+            },
+            Op::ListAppend(l, r) => {
+                let l = self.visit_expr(l)?;
+                let r = self.visit_expr(r)?;
+                match (l, r) {
+                    (Expr::List(mut ls), Expr::List(mut rs)) => {
+                        // TODO: type check when lit-to-type is implemented
+                        ls.append(&mut rs);
+                        Ok(Expr::List(ls))
+                    },
+                    _ => Err(anyhow!("'#' may only concatenate Lists.")),
+                }
+            },
+            Op::Equal(l, r) => {
+                let l = self.visit_expr(l)?;
+                let r = self.visit_expr(r)?;
+                match (&l, &r) {
+                    (Expr::BoolLit(lb), Expr::BoolLit(rb)) => {
+                        Ok(Expr::BoolLit(lb == rb))
+                    },
+                    _ => Err(anyhow!("'==' may only compare Bools. Got {l:?} and {r:?} instead." )),
+                }
+            },
+            Op::NotEqual(l, r) => {
+                let l = self.visit_expr(l)?;
+                let r = self.visit_expr(r)?;
+                match (&l, &r) {
+                    (Expr::BoolLit(lb), Expr::BoolLit(rb)) => {
+                        Ok(Expr::BoolLit(lb != rb))
+                    },
+                    _ => Err(anyhow!("'!=' may only compare Bools. Got {l:?} and {r:?} instead." )),
+                }
+            },
+            Op::Plus(l, r) => {
+                let l = self.visit_expr(l)?;
+                let r = self.visit_expr(r)?;
+                match (&l, &r) {
+                    (Expr::IntegerLit(li), Expr::IntegerLit(ri)) => {
+                        Ok(Expr::IntegerLit(li + ri))
+                    },
+                    (Expr::NaturalLit(li), Expr::NaturalLit(ri)) => {
+                        Ok(Expr::NaturalLit(li + ri))
+                    },
+                    (Expr::DoubleLit(li), Expr::DoubleLit(ri)) => {
+                        Ok(Expr::DoubleLit(li + ri))
+                    },
+                    _ => Err(anyhow!("Cannot add. Incompatible types: {l:?} '+' {r:?}" )),
+                }
+            },
+            Op::ImportAlt(l, r) => {
+                match (&**l, &**r) {
+                    (Expr::Import(_), Expr::Import(_)) => {
+                        self.visit_expr(l).or(self.visit_expr(r))
+                    },
+                    _ => Err(anyhow!("'?' can only be used on Imports. Got expressions: {l:?} '+' {r:?}" )),
+                }
+            },
+            _ => todo!()
         }
     }
 }
@@ -141,33 +237,7 @@ impl Visitor<Result<Expr>> for Interpreter {
                 }
             },
             Expr::Op(op) => {
-                match op {
-                    Op::App(l, r) => {
-                        let l = self.visit_expr(l)?;
-                        let r = self.visit_expr(r)?;
-                        
-                        match l {
-                            Expr::Lambda(arg_name, arg_type, body) => {
-                                let r = self.visit_expr(&r)?;
-                                let t = self.visit_expr(&arg_type)?;
-                                self.check_type(&r, &t)?;
-                                self.env.push();
-                                self.env.env.define(arg_name.clone(), r)?;
-                                let result = self.visit_expr(&body);
-                                self.env.pop();
-                                result
-                            },
-                            Expr::Builtin(b) => {
-                                match b {
-                                    Builtin::List => Ok(Expr::ListType(Box::new(r))),
-                                    _ => todo!("{b:?}")
-                                }
-                            },
-                            _ => todo!("{l:?}")
-                        }
-                    },
-                    _ => todo!()
-                }
+                self.process_op(op)
             },
             Expr::Select(e, n) => {
                 let e = self.visit_expr(e)?;
@@ -211,7 +281,7 @@ impl Visitor<Result<Expr>> for Interpreter {
 
             // These evaluate to themselves
             Expr::TextLit(_)
-            | Expr::Num(_)
+            | Expr::BoolLit(_) | Expr::IntegerLit(_) | Expr::DoubleLit(_) | Expr::NaturalLit(_)
             | Expr::Lambda(_, _, _)
             | Expr::Builtin(_) => {
                 Ok(expr.clone())
@@ -252,3 +322,4 @@ fn select_from(n: &str, e: &Expr) -> Result<Expr> {
         _ => todo!("{e:?}")
     }
 }
+
