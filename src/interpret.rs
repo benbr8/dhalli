@@ -160,11 +160,39 @@ impl Interpreter {
                     (Expr::NaturalLit(li), Expr::NaturalLit(ri)) => {
                         Ok(Expr::NaturalLit(li + ri))
                     },
-                    (Expr::DoubleLit(li), Expr::DoubleLit(ri)) => {
-                        Ok(Expr::DoubleLit(li + ri))
-                    },
+                    // (Expr::DoubleLit(li), Expr::DoubleLit(ri)) => {
+                    //     Ok(Expr::DoubleLit(li + ri))
+                    // },
                     _ => Err(anyhow!("Cannot add. Incompatible types: {l:?} '+' {r:?}" )),
                 }
+            },
+            Op::Combine(l, r) => {
+                let mut l = self.visit_expr(l)?;
+                let mut r = self.visit_expr(r)?;
+                
+                combine_record(&mut l, &mut r)?;
+                Ok(l)
+            },
+            Op::Prefer(l, r) => {
+                let mut l = self.visit_expr(l)?;
+                let mut r = self.visit_expr(r)?;
+
+                match (&mut l, &mut r) {
+                    (Expr::Record(li), Expr::Record(ri)) => {
+                        for (k, v) in ri {
+                            li.insert(k.clone(), v.clone());
+                        }
+                        Ok(l)
+                    },
+                    _ => Err(anyhow!("'//' can only be used on Records. Got these instead: {l:?} '+' {r:?}" )),
+                }
+            },
+            Op::CombineTypes(l, r) => {
+                let mut l = self.visit_expr(l)?;
+                let mut r = self.visit_expr(r)?;
+                
+                combine_record_type(&mut l, &mut r)?;
+                Ok(l)
             },
             Op::ImportAlt(l, r) => {
                 match (&**l, &**r) {
@@ -173,6 +201,13 @@ impl Interpreter {
                     },
                     _ => Err(anyhow!("'?' can only be used on Imports. Got expressions: {l:?} '+' {r:?}" )),
                 }
+            },
+            Op::Equivalent(l, r) => {
+                let l = self.visit_expr(l)?;
+                let r = self.visit_expr(r)?;
+
+                // TODO: is it really this easy?
+                Ok(Expr::BoolLit(l == r))
             },
             _ => todo!()
         }
@@ -249,6 +284,15 @@ impl Visitor<Result<Expr>> for Interpreter {
                 self.check_type(&r, &t)?;
                 Ok(r)
             },
+            Expr::Assert(e) => {
+                let result = self.visit_expr(e)?;
+                if let Expr::BoolLit(b) = result {
+                    if b { Ok(result) }
+                    else { Err(anyhow!("Assertion failed: {e:?}"))}
+                } else {
+                    Err(anyhow!("Assertion failed: {e:?}"))
+                }
+            }
 
 
             Expr::Import(import) => {
@@ -267,7 +311,6 @@ impl Visitor<Result<Expr>> for Interpreter {
                 }
             },
 
-
             Expr::RecordType(t) => {
                 let mut map = BTreeMap::new();
                 for (k, v) in t {
@@ -275,13 +318,16 @@ impl Visitor<Result<Expr>> for Interpreter {
                 }
                 Ok(Expr::RecordType(map))
             },
+            Expr::ListType(t) => {
+                Ok(Expr::ListType(Box::new(self.visit_expr(t)?)))
+            },
             Expr::FnType(l, r) => {
                 Ok(Expr::FnType(Box::new(self.visit_expr(l)?), Box::new(self.visit_expr(r)?)))
             }
 
             // These evaluate to themselves
             Expr::TextLit(_)
-            | Expr::BoolLit(_) | Expr::IntegerLit(_) | Expr::DoubleLit(_) | Expr::NaturalLit(_)
+            | Expr::BoolLit(_) | Expr::IntegerLit(_) | Expr::NaturalLit(_) //| Expr::DoubleLit(_)
             | Expr::Lambda(_, _, _)
             | Expr::Builtin(_) => {
                 Ok(expr.clone())
@@ -323,3 +369,65 @@ fn select_from(n: &str, e: &Expr) -> Result<Expr> {
     }
 }
 
+fn combine_record(l: &mut Expr, r: &mut Expr) -> Result<()> {
+    if let (Expr::Record(li), Expr::Record(ri)) = (l, r) {
+        for (k, v) in ri {
+            if let Some(left) = li.get_mut(k) {
+                combine_record(left, v)?;
+            } else {
+                li.insert(k.clone(), v.clone());  // TODO: there must be a way to transfer ownership instead?
+            }
+        }
+        Ok(())
+    } else {
+        Err(anyhow!("Can only combine Record expressions."))
+    }
+}
+
+// this needs to be a different function than pure records. Think about it.
+fn combine_record_type(l: &mut Expr, r: &mut Expr) -> Result<()> {
+    if let (Expr::RecordType(li), Expr::RecordType(ri)) = (l, r) {
+        for (k, v) in ri {
+            if let Some(left) = li.get_mut(k) {
+                combine_record_type(left, v)?;
+            } else {
+                li.insert(k.clone(), v.clone());  // TODO: there must be a way to transfer ownership instead?
+            }
+        }
+        Ok(())
+    } else {
+        Err(anyhow!("Can only combine Record expressions."))
+    }
+}
+
+fn check_equivalence(l: &Expr, r: &Expr) -> bool {
+    match (l, r) {
+        (Expr::Record(li), Expr::Record(ri)) => {
+            if li.len() != ri.len() {
+                return false;
+            }
+            for (k, v) in ri {
+                if let Some(left) = li.get(k) {
+                    if !check_equivalence(left, v) {
+                        return false;
+                    }
+                } else { return false; }
+            }
+            return true;
+        },
+        (Expr::List(li), Expr::List(ri)) => {
+            if li.len() != ri.len() {
+                return false;
+            }
+            let mut li = li.iter(); let mut ri = ri.iter();
+            while let Some(right) = ri.next() {
+                if !check_equivalence(li.next().unwrap(), right) {
+                    return false;
+                }
+            }
+            return true;
+        },
+        _ => todo!()
+    };
+    true
+}

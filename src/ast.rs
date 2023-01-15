@@ -2,19 +2,12 @@ use std::collections::BTreeMap;
 
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var ( pub String, pub usize );  // label, index
 
 
-#[derive(Debug, Clone)]
-pub enum Num {
-    Bool(bool),
-    Natural(u64),
-    Integer(i64),
-    Double(f64),
-}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
 
     // Some
@@ -25,7 +18,7 @@ pub enum Expr {
     BoolLit(bool),
     NaturalLit(u64),
     IntegerLit(i64),
-    DoubleLit(f64),
+    // DoubleLit(f64),
     Builtin(Builtin),
     // let x : t = r in e
     Let(String, Box<Option<Expr>>, Box<Expr>, Box<Expr>),
@@ -59,10 +52,9 @@ pub enum Import {
     Env(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     App(Box<Expr>, Box<Expr>),
-    Completion(Box<Expr>, Box<Expr>),
     Equivalent(Box<Expr>, Box<Expr>),
     ImportAlt(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),

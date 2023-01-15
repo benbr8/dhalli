@@ -26,6 +26,16 @@ fn vec_to_string(vec: Vec<char>) -> String {
     vec.into_iter().collect()
 }
 
+fn create_deep_record(name: &String, expr: Expr) -> Expr {
+    let mut iter = name.split('.').rev();
+    let mut e = expr;
+    while let Some(n) = iter.next() {
+        let mut map = BTreeMap::new();
+        map.insert(n.to_string(), e);
+        e = Expr::Record(map);
+    }
+    e
+}
 
 
 
@@ -219,12 +229,13 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(just(',').padded().ignore_then(record_literal_entry).repeated())
             .then_ignore(just(',').padded().or_not())
             .map(|(first, other)| {
-                let mut map = BTreeMap::new();
-                map.insert(first.0, first.1);
-                for tuple in other {
-                    map.insert(tuple.0, tuple.1);
+                // instead of generating one map with every element, create one map for every element and merge them together
+                // this simplifies special patterns like { a.b.c = 1, a.b.d = 2 }
+                let mut result = create_deep_record(&first.0, first.1);
+                for (name, expr) in other {
+                    result = Expr::Op(Op::Combine(Box::new(result), Box::new(create_deep_record(&name, expr))));
                 }
-                Expr::Record(map)
+                result
             });
 
         let non_empty_record_type_or_literal =
@@ -253,7 +264,6 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 others.insert(0, first);
                 Expr::List(others)
             });
-
 
 
         // Let-In
@@ -332,7 +342,12 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(just("::").padded().ignore_then(selector_expression.clone()).or_not())
             .map(|(e, c)| {
                 if let Some(c) = c {
-                    Expr::Op(Op::Completion(Box::new(e), Box::new(c)))
+                    // A :: r --> (A.default // r) : A.Type
+                    let left = Expr::Select(Box::new(e.clone()), "default".to_string());
+                    let prefer = Expr::Op(Op::Prefer(Box::new(left), Box::new(c)));
+                    let t = Expr::Select(Box::new(e), "Type".to_string());
+
+                    Expr::Annot(Box::new(prefer), Box::new(t))
                 } else { e }
             });
 
@@ -484,14 +499,29 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .map(|(l, r)| Expr::FnType(Box::new(l), Box::new(r)));
 
 
+        // empty list
+        let empty_list_literal = just('[').padded()
+            .ignore_then(just(',').padded().or_not())
+            .ignore_then(just(']').padded())
+            .ignore_then(just(':').then(ws1()))
+            .ignore_then(application_expression.clone())
+            .map(|_e| {
+                // Todo: how to handle types of lists?
+                Expr::List(Vec::new())
+            });
 
-
-
+        // assert
+        let assert = just("assert").padded()
+            .ignore_then(just(':').then(ws1()))
+            .ignore_then(expression.clone())
+            .map(|expr| Expr::Assert(Box::new(expr)));
 
         // expression = 
         let_in
             .or(lambda)
             .or(fn_type)
+            .or(empty_list_literal)
+            .or(assert)
             .or(annotated_expression)
     }).padded().then_ignore(end())
 }
