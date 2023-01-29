@@ -2,12 +2,15 @@ use std::collections::BTreeMap;
 
 use chumsky::prelude::*;
 
-use crate::ast::*;
+use crate::{ast::*, naive_double::NaiveDouble};
 
 
-
-
-
+macro_rules! padded {
+    ($name:expr) => {
+        ws().ignore_then($name).then_ignore(ws())
+        // $name
+    };
+}
 
 const KEYWORDS: &'static [&'static str] = &[
     "if", "then", "else"
@@ -26,6 +29,7 @@ fn vec_to_string(vec: Vec<char>) -> String {
     vec.into_iter().collect()
 }
 
+
 fn create_deep_record(name: &String, expr: Expr) -> Expr {
     let mut iter = name.split('.').rev();
     let mut e = expr;
@@ -37,7 +41,73 @@ fn create_deep_record(name: &String, expr: Expr) -> Expr {
     e
 }
 
+fn alphanum() -> impl Parser<char, char, Error = Simple<char>> {
+    filter(|c: &char| "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".contains(*c))
+}
 
+fn url_chars() -> impl Parser<char, char, Error = Simple<char>>  {
+    alphanum().or(filter(|c: &char| ";,/?:@&=+$-_.!~*'()#".contains(*c)))
+}
+
+fn hexdig() -> impl Parser<char, char, Error = Simple<char>>  {
+    filter(|c: &char| "abcdefABCDEF0123456789".contains(*c))
+}
+
+
+
+fn arrow() -> impl Parser<char, (), Error = Simple<char>> {
+    just("->").or(just("→")).ignored()
+}
+
+fn equiv() -> impl Parser<char, (), Error = Simple<char>> {
+    just("===").or(just("≡")).ignored()
+}
+
+
+
+
+
+
+
+
+
+fn http_path() -> impl Parser<char, String, Error = Simple<char>> {
+    let scheme = just("http").ignore_then(just('s').or_not())
+        .map(|opt_s| {
+            if let Some(_) = opt_s { "https".to_string() }
+            else { "http".to_string() }
+        });
+    // let domainlabel = recursive(|_| alphanum().repeated().at_least(1)
+    //     .then(just('-').repeated().at_least(1).then(alphanum().repeated().at_least(1)).repeated())
+    //     .map(|(first, other)| {
+    //         let mut s: String = first.iter().collect();
+    //         for (dashes, alpha) in other {
+    //             for _ in 0..dashes.len() { s.push('-') }
+    //             for c in alpha { s.push(c) }
+    //         }
+    //         s
+    //     }));
+    // let domain = domainlabel.clone()
+    //     .then(just('.').ignore_then(domainlabel.clone()).repeated())
+    //     .map(|(mut first, other)| {
+    //         for s in other { first += &s }
+    //         first
+    //     });
+    // let host = domain;
+    // let authority = host;
+
+    let url = url_chars().repeated().at_least(1)
+        .map(|vec| vec.iter().collect::<String>());
+
+    let http_raw = scheme
+        .then_ignore(just("://"))
+        .then(url)
+        .map(|(scheme, url)| {
+            scheme + "://" + &url
+        });
+
+    http_raw  // for now
+}
 
 fn local_path() -> impl Parser<char, String, Error = Simple<char>> {
     let patch_character = filter(|c: &char| {
@@ -50,8 +120,8 @@ fn local_path() -> impl Parser<char, String, Error = Simple<char>> {
             other.insert(0, first);
             vec_to_string(other)
         });
-    let path = path_component.repeated().at_least(1);
-    let here_path = just('.').ignore_then(path)
+    let path = recursive(|_| path_component.repeated().at_least(1));
+    let here_path = just('.').ignore_then(path.clone())
         .map(|paths| {
             let mut s = ".".to_string();
             for item in paths {
@@ -59,19 +129,80 @@ fn local_path() -> impl Parser<char, String, Error = Simple<char>> {
             }
             s
         });
-        
-    here_path
+    let parent_path = just("..").ignore_then(path.clone())
+        .map(|paths| {
+            let mut s = "..".to_string();
+            for item in paths {
+                s = s + &item;
+            }
+            s
+        });
+    let home_path = just('~').ignore_then(path.clone())
+        .map_with_span(|paths, span| {
+            let mut s = "~".to_string();
+            for item in paths {
+                s = s + &item;
+            }
+            s
+        });
+    let absolute_path = path.clone()
+        .map(|paths| {
+            let mut s = "".to_string();
+            for item in paths {
+                s = s + &item;
+            }
+            s
+        });
+
+    here_path.or(parent_path).or(home_path).or(absolute_path)
+}
+
+
+fn env() -> impl Parser<char, String, Error = Simple<char>> {
+
+    just("env:").ignore_then(text::ident())
 }
 
 
 fn import() -> impl Parser<char, Expr, Error = Simple<char>> {
+    let local = local_path().map(|path| Expr::Import(Import::Local(path)));
+    let env_var = env().map(|env| Expr::Import(Import::Env(env)));
+    let http = http_path().map(|url| Expr::Import(Import::Remote(url)));
 
-    
-    local_path().map(|path| Expr::Import(Import::Local(path)))
+    let hash = just("sha256:").ignore_then(hexdig().repeated().at_least(64)).ignored();
+
+    local.or(env_var).or(http)
+        .then_ignore(ws1().ignore_then(hash).or_not())
+}
+
+fn eol() -> impl Parser<char, (), Error = Simple<char>> {
+    let linux = filter(|c: &char| c == &'\n');
+    let windows = filter(|c: &char| c == &'\r').ignore_then(filter(|c: &char| c == &'\n'));
+
+    linux.or(windows).ignored()
+}
+
+fn line_comment() -> impl Parser<char, (), Error = Simple<char>> {
+    just("--").ignore_then(filter(|c: &char| c != &'\n' && c != &'\r').repeated()).ignore_then(eol()).ignored()
+}
+
+
+fn block_comment() -> impl Parser<char, (), Error = Simple<char>> {
+    let block_comment = recursive(|block_comment| {
+        let block_comment_continue = recursive(|block_comment_continue| {
+            just("-}").ignored()
+                .or(block_comment.clone().ignore_then(block_comment_continue.clone()))
+                .or(any().ignore_then(block_comment_continue.clone()))
+        });
+
+        just("{-").ignore_then(block_comment_continue.clone()).ignored()
+    });
+
+    block_comment
 }
 
 fn base_ws() -> impl Parser<char, (), Error = Simple<char>> {
-    filter(|c: &char| c.is_whitespace()).ignored()
+    filter(|c: &char| c.is_whitespace()).ignored().or(line_comment()).or(block_comment())
 }
 
 fn ws() -> impl Parser<char, (), Error = Simple<char>> {
@@ -101,7 +232,21 @@ fn integer_literal() -> impl Parser<char, Expr, Error = Simple<char>> {
         })
 }
 
-
+fn double_literal() -> impl Parser<char, Expr, Error = Simple<char>> {
+    just('+').or(just('-')).or_not()
+    .then(text::digits(10))
+    .then_ignore(just('.'))
+    .then(text::digits(10))
+    .map(|((c, int), frac)| {
+        let mut f = (int + "." + &frac).parse::<f64>().unwrap();
+        if let Some(sign) = c {
+            if sign == '-' {
+                f = -f;
+            }
+        }
+        Expr::DoubleLit(NaiveDouble::from(f))
+    })
+}
 
 fn label() -> impl Parser<char, String, Error = Simple<char>> {
     // tODO: add quoted label
@@ -120,7 +265,7 @@ fn label() -> impl Parser<char, String, Error = Simple<char>> {
             others.insert(0, first);
             let s = vec_to_string(others);
             if KEYWORDS.contains(&s.as_str()) {
-                Err(Simple::custom(span, "In is a reserved keyword"))
+                Err(Simple::custom(span, format!("{s} is a reserved keyword")))
             } else {
                 Ok(s)
             }
@@ -139,14 +284,14 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
 
     // Expression
-    recursive(|expression| {
+    padded!(recursive(|expression| {
 
         // Text + Interpolation
         let interpolation = just("${")
             .ignore_then(expression.clone())
             .then_ignore(just('}'))
             .debug("Interpolation");
-        
+
         let double_quote_chunk = interpolation.clone()
             .or(none_of('"').map(|c| Expr::TextLit(c.to_string())))
             .debug("Double quote chunk");
@@ -177,18 +322,18 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
         // Records
         let empty_record_literal = just::<char, _, Simple<char>>('=')
-            .ignore_then(just(',').padded().repeated().at_most(1))
+            .ignore_then(padded!(just(',')).repeated().at_most(1))
             .map(|_| Expr::Record(BTreeMap::new()));
 
 
-        let record_type_entry = recursive(|_| any_label_or_some().padded()
+        let record_type_entry = recursive(|_| padded!(any_label_or_some())
             .then_ignore(just(':').then(ws1()))
             .then(expression.clone()));
 
 
         let non_empty_record_type = record_type_entry.clone()
-            .then(just(',').padded().ignore_then(record_type_entry.clone()).repeated().or_not())
-            .then_ignore(just(',').or_not().padded())
+            .then(padded!(just(',')).ignore_then(record_type_entry.clone()).repeated().or_not())
+            .then_ignore(padded!(just(',').or_not()))
             .map(|(first, other)| {
                 let mut map = BTreeMap::new();
                 map.insert(first.0, first.1);
@@ -199,9 +344,9 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 }
                 Expr::RecordType(map)
             });
-            
-        let record_literal_normal_entry = just('.').padded().ignore_then(any_label_or_some()).repeated()
-            .then_ignore(just('=').padded())
+
+        let record_literal_normal_entry = padded!(just('.')).ignore_then(any_label_or_some()).repeated()
+            .then_ignore(padded!(just('=')))
             .then(expression.clone())
             .map(|(subnames, expr)| {
                 let mut subname = "".to_string();
@@ -226,8 +371,8 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         });
 
         let non_empty_record_literal = record_literal_entry.clone()
-            .then(just(',').padded().ignore_then(record_literal_entry).repeated())
-            .then_ignore(just(',').padded().or_not())
+            .then(padded!(just(',')).ignore_then(record_literal_entry).repeated())
+            .then_ignore(padded!(just(',')).or_not())
             .map(|(first, other)| {
                 // instead of generating one map with every element, create one map for every element and merge them together
                 // this simplifies special patterns like { a.b.c = 1, a.b.d = 2 }
@@ -243,22 +388,22 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
 
         let record_type_or_literal = non_empty_record_type_or_literal; // or empty
-        
-        
+
+
         let record = just('{')
-            .ignore_then(just(',').or_not().padded())
+            .ignore_then(padded!(just(',').or_not()))
             .ignore_then(record_type_or_literal)
-            .then_ignore(just('}').padded())
+            .then_ignore(padded!(just('}')))
             .labelled("record");
-        
+
 
 
         // List
-        let non_empty_list_literal = just('[').padded()
-            .ignore_then(just(',').padded().or_not())
-            .ignore_then(expression.clone().padded())
-            .then(just(',').padded().ignore_then(expression.clone().padded()).repeated())
-            .then_ignore(just(',').padded().or_not())
+        let non_empty_list_literal = padded!(just('['))
+            .ignore_then(padded!(just(',')).or_not())
+            .ignore_then(padded!(expression.clone()))
+            .then(padded!(just(',')).ignore_then(padded!(expression.clone())).repeated())
+            .then_ignore(padded!(just(',')).or_not())
             .then_ignore(just(']'))
             .map(|(first, mut others)| {
                 others.insert(0, first);
@@ -267,40 +412,39 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
 
         // Let-In
-        let let_binding = just("let")
-            .ignore_then(ws1())
-            .ignore_then(nonreserved_label().padded())
-            .then(just(':').ignore_then(ws1()).ignore_then(expression.clone()).or_not())
-            .then_ignore(just('=').padded())
-            .then(expression.clone()).padded()
+        let let_binding = padded!(just("let")
+                .ignore_then(ws1())
+                .ignore_then(padded!(nonreserved_label()))
+                .then(just(':').ignore_then(ws1()).ignore_then(expression.clone()).or_not())
+                .then_ignore(padded!(just('=')))
+                .then(expression.clone())
+            )
             .map(|((n, t), r)| {
                 (n, t, r)
             });
 
-        let let_in = let_binding.repeated().at_least(1)
-            .then_ignore(just("in"))
-            .then_ignore(ws1())
-            .then(expression.clone()).padded()
+        let let_in = padded!(let_binding.repeated().at_least(1)
+                .then_ignore(just("in"))
+                .then_ignore(ws1())
+                .then(expression.clone())
+            )
             .labelled("let_in")
-            .map(|(mut vec, e): (Vec<(String, Option<Expr>, Expr)>, Expr)| {
-                let mut e = e;
-                vec.reverse();
-                for (n, t, r) in vec {
-                    e = Expr::Let(n, Box::new(t), Box::new(r), Box::new(e));
-                }
-                e
+            .map(|(vec, e): (Vec<(String, Option<Expr>, Expr)>, Expr)| {
+                Expr::LetIn(vec, Box::new(e))
             });
 
 
 
 
         // Lambda
-        let lambda = just('\\').ignore_then(just('(').padded())
-            .ignore_then(nonreserved_label().padded())
-            .then_ignore(just(':').then(ws()).padded())
-            .then(expression.clone().padded())
-            .then_ignore(just(')').padded())
-            .then_ignore(just("->").padded())
+        let lambda_sym = just('\\').or(just('λ')).ignored();
+
+        let lambda = lambda_sym.ignore_then(padded!(just('(')))
+            .ignore_then(padded!(nonreserved_label()))
+            .then_ignore(padded!(just(':').then(ws1())))
+            .then(padded!(expression.clone()))
+            .then_ignore(padded!(just(')')))
+            .then_ignore(padded!(arrow()))
             .then(expression.clone())
             .map(|((an, at), e)| {
                 Expr::Lambda(an, Box::new(at), Box::new(e))
@@ -309,28 +453,52 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
         // primitive expressions
         let variable = nonreserved_label()
-            .then(just('@').padded().ignore_then(natural()).or_not())
+            .then(padded!(just('@')).ignore_then(natural()).or_not())
             .map(|(n, i)| {
                 Expr::Var( if let Some(i) = i { Var(n, i as usize) } else { Var(n, 0) })
             });
 
         let identifier = variable; // builtin identifiers handled in interpreter?
 
-        let primitive_expression = recursive(|_a: Recursive<char, Expr, Simple<char>>| 
+
+        // unions
+        let union_type_entry = recursive(|_| {
+            any_label_or_some().then(ws().ignore_then(just(':')).ignore_then(ws1()).ignore_then(expression.clone()).or_not())
+        });
+
+        let union_type = union_type_entry.clone()
+            .then(
+                padded!(just('|')).ignore_then(union_type_entry.clone()).repeated()
+            ).then_ignore(ws().then(just('|')).or_not())
+            .map(|(first, other)| {
+                let mut map = BTreeMap::new();
+                map.insert(first.0, first.1);
+                for item in other {
+                    map.insert(item.0, item.1);
+                }
+                Expr::UnionType(map)
+            });
+
+        let union_decl = padded!(just('<')).ignore_then(padded!(just('|')).or_not())
+            .ignore_then(union_type).then_ignore(padded!(just('>')));
+
+        let primitive_expression = recursive(|_a: Recursive<char, Expr, Simple<char>>|
             text_literal
+            .or(double_literal())
             .or(natural_literal())
             .or(integer_literal())
             .or(record)
+            .or(union_decl)
             .or(non_empty_list_literal)
             .or(identifier)
-            .or(just('(').padded().ignore_then(expression.clone()).then_ignore(just(')').padded())));
+            .or(padded!(just('(')).ignore_then(expression.clone()).then_ignore(ws().then_ignore(just(')')))));
 
         // operator expressions
 
         let selector = label(); // TODO: or labels or type-selector
 
         let selector_expression = recursive(|_| primitive_expression.clone()
-            .then(just('.').padded().ignore_then(selector).repeated())
+            .then(padded!(just('.')).ignore_then(selector).repeated())
             .map(|(mut expr, sel)| {
                 for s in sel {
                     expr = Expr::Select(Box::new(expr), s)
@@ -339,7 +507,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let completion_expression = selector_expression.clone()
-            .then(just("::").padded().ignore_then(selector_expression.clone()).or_not())
+            .then(padded!(just("::")).ignore_then(selector_expression.clone()).or_not())
             .map(|(e, c)| {
                 if let Some(c) = c {
                     // A :: r --> (A.default // r) : A.Type
@@ -354,17 +522,27 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         let import_expression = recursive(|_| import()
             .or(completion_expression)); // first below application, so referenced a lot
 
-        let first_application_expression = import_expression.clone();
+
+        let some_expression = just("Some").ignore_then(ws1()).ignore_then(import_expression.clone())
+            .map(|e| Expr::Some(Box::new(e)));
+
+        let first_application_expression = some_expression.or(import_expression.clone());
 
         let application_expression = recursive(|_| first_application_expression
-            .then(ws1().ignore_then(import_expression.clone()).or_not())
+            .then(ws1().ignore_then(import_expression.clone()).repeated())
             .labelled("application_expression")
-            .map(|(e1, e2)| {
-                if let Some(e2) = e2 { Expr::Op(Op::App(Box::new(e1), Box::new(e2)))} else { e1 }
+            .map(|(e1, mut e2)| {
+                if e2.is_empty() {
+                    e1
+                } else {
+                    e2.reverse(); // newest will be at the end for efficient popping
+                    e2.push(e1);
+                    Expr::Application(e2)
+                }
             }));
 
         let not_equal_expression = recursive(|_| application_expression.clone()
-            .then(just("!=").padded().ignore_then(application_expression.clone()).repeated())
+            .then(padded!(just("!=")).ignore_then(application_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::NotEqual(Box::new(l), Box::new(r)));
@@ -373,7 +551,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let equal_expression = recursive(|_| not_equal_expression.clone()
-            .then(just("==").padded().ignore_then(not_equal_expression.clone()).repeated())
+            .then(padded!(just("==")).ignore_then(not_equal_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::Equal(Box::new(l), Box::new(r)));
@@ -382,7 +560,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let times_expression = recursive(|_| equal_expression.clone()
-            .then(just("*").padded().ignore_then(equal_expression.clone()).repeated())
+            .then(padded!(just("*")).ignore_then(equal_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::Times(Box::new(l), Box::new(r)));
@@ -391,16 +569,16 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let combine_types_expression = recursive(|_| times_expression.clone()
-            .then(just("//\\\\").padded().ignore_then(times_expression.clone()).repeated())
+            .then(padded!(just("//\\\\")).ignore_then(times_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::CombineTypes(Box::new(l), Box::new(r)));
                 }
                 l
             }));
-            
+
         let prefer_expression = recursive(|_| combine_types_expression.clone()
-            .then(just("//").padded().ignore_then(combine_types_expression.clone()).repeated())
+            .then(padded!(just("//")).ignore_then(combine_types_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::Prefer(Box::new(l), Box::new(r)));
@@ -409,7 +587,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let combine_expression = recursive(|_| prefer_expression.clone()
-            .then(just("/\\").padded().ignore_then(prefer_expression.clone()).repeated())
+            .then(padded!(just("/\\")).ignore_then(prefer_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::Combine(Box::new(l), Box::new(r)));
@@ -418,7 +596,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let and_expression = recursive(|_| combine_expression.clone()
-            .then(just("&&").padded().ignore_then(combine_expression.clone()).repeated())
+            .then(padded!(just("&&")).ignore_then(combine_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::And(Box::new(l), Box::new(r)));
@@ -427,7 +605,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let list_append_expression = recursive(|_| and_expression.clone()
-            .then(just("#").padded().ignore_then(and_expression.clone()).repeated())
+            .then(padded!(just("#")).ignore_then(and_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::ListAppend(Box::new(l), Box::new(r)));
@@ -436,7 +614,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let text_append_expression = recursive(|_| list_append_expression.clone()
-            .then(just("++").padded().ignore_then(list_append_expression.clone()).repeated())
+            .then(padded!(just("++")).ignore_then(list_append_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::TextAppend(Box::new(l), Box::new(r)));
@@ -444,8 +622,8 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 l
             }));
 
-        let plus_expression = recursive(|_| text_append_expression.clone().padded()
-            .then(just("+").ignore_then(ws1()).ignore_then(text_append_expression.clone()).repeated())
+        let plus_expression = recursive(|_| padded!(text_append_expression.clone())
+            .then(just("+").ignore_then(ws1()).ignore_then(padded!(text_append_expression.clone())).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::Plus(Box::new(l), Box::new(r)));
@@ -454,7 +632,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let or_expression = recursive(|_| plus_expression.clone()
-            .then(just("||").padded().ignore_then(plus_expression.clone()).repeated())
+            .then(padded!(just("||")).ignore_then(plus_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::Or(Box::new(l), Box::new(r)));
@@ -463,7 +641,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let import_alt_expression = recursive(|_| or_expression.clone()
-            .then(just("?").padded().ignore_then(or_expression.clone()).repeated())
+            .then(padded!(just("?")).ignore_then(or_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::ImportAlt(Box::new(l), Box::new(r)));
@@ -472,7 +650,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             }));
 
         let equivalent_expression = recursive(|_| import_alt_expression.clone()
-            .then(just("===").padded().ignore_then(import_alt_expression.clone()).repeated())
+            .then(padded!(equiv()).ignore_then(import_alt_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
                     l = Expr::Op(Op::Equivalent(Box::new(l), Box::new(r)));
@@ -485,24 +663,58 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 
 
         // annotated expression
-        let annotated_expression = operator_expression.clone().padded()
+        let annotated_expression = padded!(operator_expression.clone())
             .then(just(':').ignore_then(ws1()).ignore_then(expression.clone()).or_not())
             .map(|(e, t): (Expr, Option<Expr>)| {
                 if let Some(t) = t { Expr::Annot(Box::new(e), Box::new(t)) } else { e }
             });
 
 
+        // with expression
+
+        let with_clause = any_label_or_some().then(padded!(just('.')).ignore_then(any_label_or_some()).repeated())
+            .then_ignore(padded!(just('=')))
+            .then(operator_expression.clone())
+            .map(|((mut name, subnames), e)| {
+                for sn in subnames {
+                    name = name + "." + &sn;
+                }
+                create_deep_record(&name, e)
+            });
+
+        let with_expression =
+            // import_expression.clone().then(ws1().then_ignore(just("with")).then_ignore(ws1()).then(with_clause).repeated().at_least(1))
+            import_expression.clone().then(ws().ignore_then(just("with")).ignore_then(ws1()).ignore_then(with_clause).repeated().at_least(1))
+            .map(|(mut e, with_vec): (Expr, Vec<Expr>)| {
+                for expr in with_vec {
+                    e = Expr::Op(Op::Prefer(Box::new(e), Box::new(expr)));
+                }
+                e
+            });
+
+        // if else
+        let if_expression =
+            just("if").ignore_then(ws1())
+            .ignore_then(padded!(expression.clone()))
+            .then_ignore(just("then").ignore_then(ws1()))
+            .then(padded!(expression.clone()))
+            .then_ignore(just("else").then_ignore(ws1()))
+            .then(padded!(expression.clone()))
+            .map(|((ife, thene), elsee): ((Expr, Expr), Expr)| {
+                Expr::IfThenElse(Box::new(ife), Box::new(thene), Box::new(elsee))
+            });
+
         // fn type
-        let fn_type = operator_expression
-            .then_ignore(just("->").padded())
+        let fn_type = padded!(operator_expression
+            .then_ignore(arrow()))
             .then(expression.clone())
             .map(|(l, r)| Expr::FnType(Box::new(l), Box::new(r)));
 
 
         // empty list
-        let empty_list_literal = just('[').padded()
-            .ignore_then(just(',').padded().or_not())
-            .ignore_then(just(']').padded())
+        let empty_list_literal = padded!(just('['))
+            .ignore_then(padded!(just(',')).or_not())
+            .ignore_then(padded!(just(']')))
             .ignore_then(just(':').then(ws1()))
             .ignore_then(application_expression.clone())
             .map(|_e| {
@@ -511,17 +723,35 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             });
 
         // assert
-        let assert = just("assert").padded()
+        let assert = padded!(just("assert"))
             .ignore_then(just(':').then(ws1()))
             .ignore_then(expression.clone())
             .map(|expr| Expr::Assert(Box::new(expr)));
 
-        // expression = 
+        // forall
+        let forall = padded!(just("forall").or(just("∀"))
+            .ignore_then(padded!(just('(')))
+            .ignore_then(padded!(label()))
+            .then_ignore(just(':').ignore_then(ws1()))
+            .then(padded!(expression.clone()))
+            .then_ignore(just(')').then_ignore(padded!(arrow())))
+            .then(padded!(expression.clone()))
+            .map(|((_n, l), r): ((String, Expr), Expr)| {
+                Expr::FnType(Box::new(l), Box::new(r))
+            }));
+
+
+
+
+        // expression =
         let_in
             .or(lambda)
+            .or(if_expression)
             .or(fn_type)
+            .or(forall)
+            .or(with_expression)
             .or(empty_list_literal)
             .or(assert)
             .or(annotated_expression)
-    }).padded().then_ignore(end())
+    })).then_ignore(end())
 }

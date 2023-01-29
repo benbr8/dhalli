@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
-
-
+use crate::naive_double::NaiveDouble;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var ( pub String, pub usize );  // label, index
 
-
+pub struct Node {
+    expr: Expr,
+    span: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -18,9 +20,10 @@ pub enum Expr {
     BoolLit(bool),
     NaturalLit(u64),
     IntegerLit(i64),
-    // DoubleLit(f64),
+    DoubleLit(NaiveDouble),
     Builtin(Builtin),
     // let x : t = r in e
+    LetIn(Vec<(String, Option<Expr>, Expr)>, Box<Expr>),
     Let(String, Box<Option<Expr>>, Box<Expr>, Box<Expr>),
     // Record
     RecordType(BTreeMap<String, Expr>),
@@ -28,17 +31,24 @@ pub enum Expr {
     // List
     List(Vec<Expr>),
     ListType(Box<Expr>),
+    // Union
+    UnionType(BTreeMap<String, Option<Expr>>),
+    // UnionItem
+    // union type, name of variant, Literal
+    UnionItem(BTreeMap<String, Option<Expr>>, String, Option<Box<Expr>>),
 
     Var(Var),
     // \(x : A) -> b
     Select(Box<Expr>, String),
     Lambda(String, Box<Expr>, Box<Expr>),  // arg-name, arg-type, expr
     FnType(Box<Expr>, Box<Expr>),
+    Application(Vec<Expr>),
 
     // Operations
     Op(Op),
 
     // x : t
+    IfThenElse(Box<Expr>, Box<Expr>, Box<Expr>),
     Annot(Box<Expr>, Box<Expr>),
     // assert : x
     Assert(Box<Expr>),
@@ -54,7 +64,7 @@ pub enum Import {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    App(Box<Expr>, Box<Expr>),
+    App(Vec<Expr>),
     Equivalent(Box<Expr>, Box<Expr>),
     ImportAlt(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),

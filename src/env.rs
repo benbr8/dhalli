@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow, Context};
 use crate::ast::Expr;
 
 
-
+#[derive(Debug, Clone)]
 pub struct Environment {
     pub env: EnvInner<Expr>,
 }
@@ -23,6 +23,7 @@ impl Environment {
 }
 
 
+#[derive(Debug, Clone)]
 pub struct EnvInner<T: Clone> {
     map: Vec<HashMap<String, T>>,
 }
@@ -44,7 +45,9 @@ impl<T: Clone> EnvInner<T> {
     }
     pub fn get(&self, name: &String) -> Result<&T> {
         for level in (0..=self.depth()).rev() {
+            // println!("Looking for {} on level {}", name, level);
             if let Ok(lit) = self.get_level(level, name) {
+                // println!("found");
                 return Ok(lit);
             }
         }
@@ -59,7 +62,7 @@ impl<T: Clone> EnvInner<T> {
         }
     }
     pub fn exists(&self, name: &String) -> bool {
-        for level in (0..=self.depth()).rev() { 
+        for level in (0..=self.depth()).rev() {
             if self.exists_level(level, name) { return true; }
         }
         false
