@@ -1,7 +1,6 @@
-use anyhow::Result;
 
 use crate::ast::{Expr, self};
-use crate::bytecode::{Op, Value, Function};
+use crate::bytecode::{Op, Value, Function, Upvalue};
 use crate::error::{Error, CompileError};
 
 
@@ -23,6 +22,7 @@ struct FunctionCompiler {
     func: Function,
     scope_depth: usize,
     locals: Vec<Local>,
+    upvalues: Vec<Upvalue>,
     is_lambda: bool,
 }
 
@@ -35,7 +35,7 @@ struct Local {
 impl FunctionCompiler {
     pub fn new(is_lambda: bool) -> Self {
         let locals = vec![Local::default()];
-        Self { func: Function::new(), scope_depth: 0, locals, is_lambda }
+        Self { func: Function::new(), scope_depth: 0, locals, upvalues: Vec::new(), is_lambda }
     }
     // consume compiler and return generated code chunk
     pub fn get_function(self) -> Function {
@@ -130,6 +130,8 @@ impl Compiler {
     fn function(&mut self) -> &mut Function {
         &mut self.compilers.last_mut().unwrap().func
     }
+
+    /// returns current topmost FunctionCompiler
     fn compiler(&mut self) -> &mut FunctionCompiler {
         self.compilers.last_mut().unwrap()
     }
@@ -170,10 +172,11 @@ impl Compiler {
         }
     }
 
-    fn resolve_variable(&mut self, name: &String) -> Result<(usize, usize), Error> {
+    // this must only be called in the current compiling
+    fn resolve_variable(&mut self, name: &str) -> Result<(usize, usize), Error> {
         let mut cidx = self.compilers.len()-1;
         loop {
-            if let Some(idx) = self.resolve_variable_remote(name, cidx) {
+            if let Some(idx) = self.resolve_local_at_level(name, cidx) {
                 println!("Resolving variable {name} to index={idx}, cdepth={cidx}");
                 return Ok((cidx, idx));
             } else {
@@ -188,13 +191,25 @@ impl Compiler {
                     } else { true }
                 } else { true };
                 if !ok_to_look_up {
-                    return Err(Error::CompileError(CompileError::VarUndefined(name.clone(), 0)));
-                }
+                    break;
+                };
                 cidx -= 1;
             }
         }
+
+        // if not in locals, try upvalues
+        for cidx in (0..cidx).rev() {
+            if let Some(stack_offset) = self.resolve_local_at_level(name, cidx) {
+                self.add_upvalue(Upvalue::Local(stack_offset), );
+            }
+        }
+
+
+        todo!()
     }
-    fn resolve_variable_remote(&mut self, name: &String, cidx: usize) -> Option<usize> {
+
+
+    fn resolve_local_at_level(&mut self, name: &str, cidx: usize) -> Option<usize> {
         let compiler = self.compilers.get(cidx).unwrap();
         println!("At cidx={cidx}: locals={:?}", compiler.locals);
 
@@ -204,6 +219,17 @@ impl Compiler {
             }
         }
         return None;
+    }
+
+    fn resolve_upvalue_at_level(&mut self, name: &str, cidx: usize) -> Option<usize> {
+
+
+
+        todo!()
+    }
+
+    fn add_upvalue(&mut self, upvalue: Upvalue, cidx: usize) {
+        self.compilers[cidx].upvalues.push(upvalue);
     }
 
 

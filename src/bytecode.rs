@@ -29,6 +29,13 @@ pub enum Value {
 
 
 #[derive(Debug, Clone)]
+pub enum Upvalue {
+    Local(usize),
+    Upval(usize),
+}
+
+
+#[derive(Debug, Clone)]
 pub struct Function {
     pub arity: u8,
     pub chunk: Chunk,
