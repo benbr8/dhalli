@@ -12,6 +12,11 @@ pub fn compile(ast: &Expr) -> Result<Function, Error> {
     Ok(function)
 }
 
+enum ResolvedVar {
+    Local(usize),
+    Upval(usize),
+}
+
 #[derive(Debug, Default)]
 struct Compiler {
     compilers: Vec<FunctionCompiler>,
@@ -30,6 +35,7 @@ struct FunctionCompiler {
 struct Local {
     name: String,
     depth: usize,
+    is_captured: bool,
 }
 
 impl FunctionCompiler {
@@ -119,8 +125,11 @@ impl Compiler {
             },
             Expr::Var(var) => {
                 // TODO: x@2
-                let (cidx, idx) = self.resolve_variable(&var.0)?;
-                self.emit(Op::GetVar(cidx, idx), 0)
+                let var = self.resolve_variable(&var.0)?;
+                match var {
+                    ResolvedVar::Local(idx) => self.emit(Op::GetVar(idx), 0),
+                    ResolvedVar::Upval(idx) => self.emit(Op::GetUpval(idx), 0),
+                }
             },
             _ => todo!("ast:?")
         };
@@ -162,7 +171,7 @@ impl Compiler {
     fn declare_variable(&mut self, name: String) -> Result<(), Error> {
         let compiler_depth = self.compilers.len()-1;
         let c = self.compiler();
-        let local = Local { name, depth: c.scope_depth };
+        let local = Local { name, depth: c.scope_depth, is_captured: false };
         if c.locals.contains(&local) {
             Err(Error::CompileError(CompileError::VarRedefinition(local.name, 0)))
         } else {
@@ -173,39 +182,19 @@ impl Compiler {
     }
 
     // this must only be called in the current compiling
-    fn resolve_variable(&mut self, name: &str) -> Result<(usize, usize), Error> {
-        let mut cidx = self.compilers.len()-1;
-        loop {
-            if let Some(idx) = self.resolve_local_at_level(name, cidx) {
-                println!("Resolving variable {name} to index={idx}, cdepth={cidx}");
-                return Ok((cidx, idx));
+    fn resolve_variable(&mut self, name: &str) -> Result<ResolvedVar, Error> {
+        let cidx = self.compilers.len()-1;
+
+        if let Some(idx) = self.resolve_local_at_level(name, cidx) {
+            Ok(ResolvedVar::Local(idx))
+        } else {
+            if let Some(upval_idx) = self.resolve_upvalue_at_level(name, cidx) {
+                Ok(ResolvedVar::Upval(upval_idx))
             } else {
-                let is_lambda = self.compilers.get(cidx).unwrap().is_lambda;
-                let ok_to_look_up = if cidx == 0 || is_lambda {
-                    false
-                } else if cidx >= 1 {
-                    // cant refer to outer variable if outer frame is a lambda, since
-                    // this can only be the argument and it may no longer be in scope
-                    if self.compilers.get(cidx-1).unwrap().is_lambda {
-                        false
-                    } else { true }
-                } else { true };
-                if !ok_to_look_up {
-                    break;
-                };
-                cidx -= 1;
+                Err(Error::CompileError(CompileError::VarUndefined(name.to_string(), 0)))
             }
         }
 
-        // if not in locals, try upvalues
-        for cidx in (0..cidx).rev() {
-            if let Some(stack_offset) = self.resolve_local_at_level(name, cidx) {
-                self.add_upvalue(Upvalue::Local(stack_offset), );
-            }
-        }
-
-
-        todo!()
     }
 
 
@@ -222,14 +211,27 @@ impl Compiler {
     }
 
     fn resolve_upvalue_at_level(&mut self, name: &str, cidx: usize) -> Option<usize> {
+        if cidx <= 1 {
+            return None;
+        }
+        if let Some(idx) = self.resolve_local_at_level(name, cidx - 1) {
+            let up_idx = self.add_upvalue(Upvalue::Local(idx), cidx);
+            Some(up_idx)
+        } else {
+            if let Some(up_idx) = self.resolve_upvalue_at_level(name, cidx - 1) {
+                let up_idx = self.add_upvalue(Upvalue::Upval(up_idx), cidx);
+                Some(up_idx)
+            } else {
+                None
+            }
+        }
 
-
-
-        todo!()
     }
 
-    fn add_upvalue(&mut self, upvalue: Upvalue, cidx: usize) {
+    fn add_upvalue(&mut self, upvalue: Upvalue, cidx: usize) -> usize {
+        let up_idx = self.compilers[cidx].upvalues.len();
         self.compilers[cidx].upvalues.push(upvalue);
+        up_idx
     }
 
 

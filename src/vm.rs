@@ -112,9 +112,9 @@ impl Vm {
                     _ => todo!()
                 }
             },
-            Op::GetVar(fidx, idx) => {
+            Op::GetVar(idx) => {
                 // println!("{} {}", self.frame().stack_offset, idx);
-                let stack_idx = self.frames.get(fidx).unwrap().stack_offset + idx;
+                let stack_idx = self.frame().stack_offset + idx;
                 let val = self.stack[stack_idx].clone();  // this is also bad, we might be copying a lot of function code around
                 self.push_stack(val);
             },

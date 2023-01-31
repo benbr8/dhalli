@@ -15,7 +15,8 @@ pub enum Op {
     Closure(usize),
     Call(usize), // arg_cnt
     Constant(usize),
-    GetVar(usize, usize),  // frame_idx, stack_idx
+    GetVar(usize),
+    GetUpval(usize),
     Add,
 }
 
