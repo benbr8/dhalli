@@ -38,7 +38,7 @@ struct Local {
 }
 
 impl FunctionCompiler {
-    pub fn new(is_lambda: bool) -> Self {
+    pub fn new() -> Self {
         let locals = vec![Local::default()];
         Self { func: Function::new(), scope_depth: 0, locals, upvalues: Vec::new() }
     }
@@ -51,7 +51,7 @@ impl FunctionCompiler {
 impl Compiler {
 
     pub fn new() -> Self {
-        Self { compilers: vec![FunctionCompiler::new(true)] }
+        Self { compilers: vec![FunctionCompiler::new()] }
     }
 
     pub fn get_function(mut self) -> Function {
@@ -60,8 +60,8 @@ impl Compiler {
     }
 
 
-    fn push_compiler(&mut self, is_lambda: bool) {
-        self.compilers.push(FunctionCompiler::new(is_lambda));
+    fn push_compiler(&mut self) {
+        self.compilers.push(FunctionCompiler::new());
     }
     fn pop_compiler(&mut self) -> FunctionCompiler {
         self.compilers.pop().unwrap()
@@ -99,13 +99,15 @@ impl Compiler {
             },
             // Expr::RecordLit(vec) => {
             //     let vec = vec.clone()
+            //     self.begin_scope();
+
+
             // },
             Expr::LetIn(vec, sub) => {
-
-                self.push_compiler(false);
+                self.push_compiler();
                 self.function().arity = 0;  // let doesn't take arguments
                 for (name, _, val) in vec {
-                    println!("Declaring {name}");
+                    // println!("Declaring {name}");
                     // computed val is on top of stack
                     self.compile(val)?;
                     // declare val as variable
@@ -123,7 +125,7 @@ impl Compiler {
                 self.emit(Op::Call(0), 0);  // immediately call with 0 args
             },
             Expr::Lambda(arg_name, _, expr) => {
-                self.push_compiler(true);
+                self.push_compiler();
                 self.function().arity = 1;  // lambdas always have one argument
                 self.declare_variable(arg_name.clone())?;  // Register arg_name to point to first slot of call frame
                 self.compile(expr)?;
@@ -185,16 +187,22 @@ impl Compiler {
     fn begin_scope(&mut self) {
         self.compiler().scope_depth += 1;
     }
-    fn end_scope(&mut self) {
+    fn end_scope_with_result(&mut self) {
         self.compiler().scope_depth -= 1;
-        for j in (self.compiler().locals.len()-1)..0 {
+        // for j in (self.compiler().locals.len()-1)..0 {
+        for j in (0..self.compiler().locals.len()).rev() {
             if self.compiler().locals[j].depth > self.compiler().scope_depth {
-                // self.emit(Op::Pop, 0);
+                if self.compiler().locals[j].is_captured {
+                    self.emit(Op::CloseUpvalueBeneath, 0);
+                } else {
+                    self.emit(Op::PopBeneath, 0);
+                }
             } else {
                 break;
             }
         }
     }
+
 
     // declaring a (local) variable is as simple as mapping the current stack top to a name
     fn declare_variable(&mut self, name: String) -> Result<(), Error> {

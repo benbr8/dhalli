@@ -155,12 +155,20 @@ impl Vm {
             Op::CloseUpvalue(idx) => {
                 // println!("Lifting upvalue {idx}");
                 let stack_idx = self.frame()?.stack_offset + idx;
-                if let Some(j) = self.upvalues.iter()
-                    .position(|x| *x.borrow() == UpvalI::Open(stack_idx))
-                {
-                    let target = self.upvalues.remove(j);
-                    target.replace(UpvalI::Closed(self.stack[stack_idx].clone()));
-                }
+                let val = self.stack[stack_idx].clone();
+                self.close_upvalue(stack_idx, val);
+            },
+            Op::CloseUpvalueBeneath => {
+                let r = self.pop_stack()?;
+                let val = self.pop_stack()?;
+                let stack_idx = self.stack.len();
+                self.close_upvalue(stack_idx, val);
+                self.push_stack(r);
+
+            },
+            Op::Pop => { self.pop_stack()?; },
+            Op::PopBeneath => {
+                self.stack.remove(self.stack.len()-2);
             },
             Op::Return => {
                 let ret = self.pop_stack()?;
@@ -187,22 +195,6 @@ impl Vm {
         }
         Ok(())
     }
-
-    // fn get_upval(&self, idx: usize, frame_idx: usize) -> Result<usize, RuntimeError> {
-    //     match &self.frames[frame_idx].closure.upvalues[idx] {
-    //         Upvalue::Open(stack_idx)
-    //         UpvalueLoc::Local(idx) => {
-    //             Ok(self.frames[frame_idx].stack_offset + idx)
-    //         },
-    //         UpvalueLoc::Upval(idx) => {
-    //             if frame_idx != 0 {
-    //                 self.get_upval(*idx, frame_idx - 1)
-    //             } else {
-    //                 Err(RuntimeError::InternalBug(format!("Upvalue points out of call stack")))
-    //             }
-    //         }
-    //     }
-    // }
 
     fn print_stack(&self) {
         let frame_starts: Vec<usize> = self.frames.iter().map(|frame| {
@@ -258,6 +250,14 @@ impl Vm {
             Ok(&self.stack.get(self.stack.len()-n-1).unwrap())
         } else {
             Err(RuntimeError::StackUnderflow)
+        }
+    }
+    fn close_upvalue(&mut self, stack_idx: usize, val: Value) {
+        if let Some(j) = self.upvalues.iter()
+            .position(|x| *x.borrow() == UpvalI::Open(stack_idx))
+        {
+            let target = self.upvalues.remove(j);
+            target.replace(UpvalI::Closed(val));
         }
     }
 }

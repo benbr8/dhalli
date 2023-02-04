@@ -12,9 +12,12 @@ pub struct Chunk {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
+    Pop,
+    PopBeneath,
     Return,
     Closure(usize),
     Upval(UpvalueLoc), // separate from Closure to not inflate Op too much
+    CloseUpvalueBeneath,
     CloseUpvalue(usize),
     Call(usize), // arg_cnt
     Constant(usize),
