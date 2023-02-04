@@ -1,6 +1,6 @@
 
 use crate::ast::{Expr, self};
-use crate::bytecode::{Op, Value, Function, Upvalue};
+use crate::bytecode::{Op, Value, Function, UpvalueLoc};
 use crate::error::{Error, CompileError};
 
 
@@ -27,11 +27,10 @@ struct FunctionCompiler {
     func: Function,
     scope_depth: usize,
     locals: Vec<Local>,
-    upvalues: Vec<Upvalue>,
-    is_lambda: bool,
+    upvalues: Vec<UpvalueLoc>,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Local {
     name: String,
     depth: usize,
@@ -41,7 +40,7 @@ struct Local {
 impl FunctionCompiler {
     pub fn new(is_lambda: bool) -> Self {
         let locals = vec![Local::default()];
-        Self { func: Function::new(), scope_depth: 0, locals, upvalues: Vec::new(), is_lambda }
+        Self { func: Function::new(), scope_depth: 0, locals, upvalues: Vec::new() }
     }
     // consume compiler and return generated code chunk
     pub fn get_function(self) -> Function {
@@ -84,11 +83,29 @@ impl Compiler {
                 let const_idx = self.add_constant(Value::Natural(*val));
                 self.emit(Op::Constant(const_idx), 0);
             },
+            Expr::Text(vec) => {
+                let mut first = true;
+                for (s, e) in vec {
+                    println!("{s}, {e:?}");
+                    let const_idx = self.add_constant(Value::String(s.clone()));
+                    self.emit(Op::Constant(const_idx), 0);
+                    if let Some(e) = e {
+                        self.compile(e)?;
+                        self.emit(Op::Concat, 0);
+                    }
+                    if !first { self.emit(Op::Concat, 0); }
+                    else { first = false; }
+                }
+            },
+            // Expr::RecordLit(vec) => {
+            //     let vec = vec.clone()
+            // },
             Expr::LetIn(vec, sub) => {
 
                 self.push_compiler(false);
                 self.function().arity = 0;  // let doesn't take arguments
                 for (name, _, val) in vec {
+                    println!("Declaring {name}");
                     // computed val is on top of stack
                     self.compile(val)?;
                     // declare val as variable
@@ -96,9 +113,13 @@ impl Compiler {
                 }
                 self.compile(sub)?;
                 self.emit(Op::Return, 0);
+                let upvalues = self.compiler().upvalues.clone();  // inefficient
                 let func = self.pop_compiler().get_function();
                 let const_idx = self.add_constant(Value::Function(func));
                 self.emit(Op::Closure(const_idx), 0);
+                for upval in upvalues {
+                    self.emit(Op::Upval(upval), 0);
+                }
                 self.emit(Op::Call(0), 0);  // immediately call with 0 args
             },
             Expr::Lambda(arg_name, _, expr) => {
@@ -106,10 +127,19 @@ impl Compiler {
                 self.function().arity = 1;  // lambdas always have one argument
                 self.declare_variable(arg_name.clone())?;  // Register arg_name to point to first slot of call frame
                 self.compile(expr)?;
+                for (idx, local) in self.compiler().locals.clone().iter().enumerate() {
+                    if local.is_captured {
+                        self.emit(Op::CloseUpvalue(idx), 0);
+                    }
+                }
                 self.emit(Op::Return, 0);
+                let upvalues = self.compiler().upvalues.clone();  // inefficient
                 let func = self.pop_compiler().get_function();
                 let const_idx = self.add_constant(Value::Function(func));  // add function to constants
                 self.emit(Op::Closure(const_idx), 0);  // Refer to constant in bytecode
+                for upval in upvalues {
+                    self.emit(Op::Upval(upval), 0);
+                }
             },
             Expr::Application(vec) => {
                 // parser ensures length of vector is at least 2
@@ -119,7 +149,6 @@ impl Compiler {
                 for j in (0..first).rev() {
                     self.compile(&vec[j])?;
                     self.emit(Op::Call(1), 0);
-                    println!("Call(1)");
                 }
 
             },
@@ -160,7 +189,7 @@ impl Compiler {
         self.compiler().scope_depth -= 1;
         for j in (self.compiler().locals.len()-1)..0 {
             if self.compiler().locals[j].depth > self.compiler().scope_depth {
-                self.emit(Op::Pop, 0);
+                // self.emit(Op::Pop, 0);
             } else {
                 break;
             }
@@ -184,8 +213,10 @@ impl Compiler {
     // this must only be called in the current compiling
     fn resolve_variable(&mut self, name: &str) -> Result<ResolvedVar, Error> {
         let cidx = self.compilers.len()-1;
+        println!("Try Resolving {name} at cidx={cidx}");
 
-        if let Some(idx) = self.resolve_local_at_level(name, cidx) {
+        if let Some(idx) = self.resolve_local_at_level(name, cidx, false) {
+            println!("Resolving {name} locally cidx={cidx}");
             Ok(ResolvedVar::Local(idx))
         } else {
             if let Some(upval_idx) = self.resolve_upvalue_at_level(name, cidx) {
@@ -198,12 +229,12 @@ impl Compiler {
     }
 
 
-    fn resolve_local_at_level(&mut self, name: &str, cidx: usize) -> Option<usize> {
-        let compiler = self.compilers.get(cidx).unwrap();
-        println!("At cidx={cidx}: locals={:?}", compiler.locals);
+    fn resolve_local_at_level(&mut self, name: &str, cidx: usize, capture: bool) -> Option<usize> {
+        let compiler = self.compilers.get_mut(cidx).unwrap();
 
         for p in (0..compiler.locals.len()).rev() {
             if &compiler.locals[p].name == name {
+                compiler.locals[p].is_captured = capture;
                 return Some(p);
             }
         }
@@ -214,21 +245,23 @@ impl Compiler {
         if cidx <= 1 {
             return None;
         }
-        if let Some(idx) = self.resolve_local_at_level(name, cidx - 1) {
-            let up_idx = self.add_upvalue(Upvalue::Local(idx), cidx);
+        if let Some(stack_offset) = self.resolve_local_at_level(name, cidx-1, true) {
+            let up_idx = self.add_upvalue(UpvalueLoc::Local(stack_offset), cidx);
+            println!("Resolving {name} locally at cidx={}, upval_idx={up_idx}", cidx-1);
             Some(up_idx)
         } else {
             if let Some(up_idx) = self.resolve_upvalue_at_level(name, cidx - 1) {
-                let up_idx = self.add_upvalue(Upvalue::Upval(up_idx), cidx);
+                let up_idx = self.add_upvalue(UpvalueLoc::Upval(up_idx), cidx);
+                println!("Adding upval at cidx={cidx}, upval_idx={up_idx}");
                 Some(up_idx)
             } else {
                 None
             }
         }
-
     }
 
-    fn add_upvalue(&mut self, upvalue: Upvalue, cidx: usize) -> usize {
+    fn add_upvalue(&mut self, upvalue: UpvalueLoc, cidx: usize) -> usize {
+        println!("Adding upvalue at cidx={cidx}");
         let up_idx = self.compilers[cidx].upvalues.len();
         self.compilers[cidx].upvalues.push(upvalue);
         up_idx

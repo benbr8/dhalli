@@ -21,6 +21,7 @@ pub enum Expr {
     NaturalLit(u64),
     IntegerLit(i64),
     DoubleLit(NaiveDouble),
+    RecordLit(Vec<(String, Expr)>),
     Builtin(Builtin),
     // let x : t = r in e
     LetIn(Vec<(String, Option<Expr>, Expr)>, Box<Expr>),
@@ -45,6 +46,7 @@ pub enum Expr {
     Application(Vec<Expr>),
 
     // Operations
+    Combine(Box<Expr>, Box<Expr>),
     Op(Op),
 
     // x : t

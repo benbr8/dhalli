@@ -1,26 +1,30 @@
 
+use std::{rc::Rc, cell::RefCell};
+
 use crate::error::{Error, RuntimeError};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Chunk {
     pub code: Vec<Op>,
     pub constants: Vec<Value>,
     pub spans: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    Pop,
     Return,
     Closure(usize),
+    Upval(UpvalueLoc), // separate from Closure to not inflate Op too much
+    CloseUpvalue(usize),
     Call(usize), // arg_cnt
     Constant(usize),
     GetVar(usize),
     GetUpval(usize),
     Add,
+    Concat,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Natural(u64),
     String(String),
@@ -29,27 +33,50 @@ pub enum Value {
 }
 
 
-#[derive(Debug, Clone)]
-pub enum Upvalue {
+pub type Upvalue = Rc<RefCell<UpvalI>>;
+
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpvalI {
+    Open(usize),
+    Closed(Value),
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpvalueLoc {
     Local(usize),
     Upval(usize),
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Function {
     pub arity: u8,
     pub chunk: Chunk,
 }
 
-#[derive(Debug, Clone)]
+
+impl std::fmt::Debug for Function {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Function")
+        //  .field("x", &self.x)
+        //  .field("y", &self.y)
+            .finish()
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
     pub func: Function,
+    pub upvalues: Vec<Upvalue>,
 }
 
 impl Closure {
     pub fn new(func: Function) -> Self {
-        Self { func }
+        Self { func, upvalues: Vec::new() }
     }
 }
 
@@ -72,11 +99,11 @@ impl Chunk {
         self.spans.push(span);
     }
 
-    pub fn get_constant(&self, idx: usize) -> Result<Value, Error> {
+    pub fn get_constant(&self, idx: usize) -> Result<Value, RuntimeError> {
         if let Some(val) = self.constants.get(idx) {
             Ok(val.clone())
         } else {
-            Err(Error::RuntimeError(RuntimeError::Basic(format!("Could not access constant. Index out of range: {}", idx))))
+            Err(RuntimeError::Basic(format!("Could not access constant. Index out of range: {}", idx)))
         }
     }
     pub fn add_constant(&mut self, val: Value) -> usize {
