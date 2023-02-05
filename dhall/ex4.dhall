@@ -1,3 +1,3 @@
-
-{ a = ./noexist.dhalll ? ./import.dhall
-,b=./../dhall/import.dhall }
+let a = ./import.dhall
+let b = ./import.dhall
+in "${a} ${b}"

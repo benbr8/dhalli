@@ -1,2 +1,1 @@
-
-{ imported = "text" }
+"imported"
