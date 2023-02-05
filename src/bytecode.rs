@@ -13,6 +13,7 @@ pub struct Chunk {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     Import(usize),
+    Builtin(Builtin),
     Pop,
     PopBeneath,
     Call(usize), // arg_cnt
@@ -24,16 +25,19 @@ pub enum Op {
     Constant(usize),
     GetVar(usize),
     GetUpval(usize),
-    Add,
-    Concat,
     CreateRecord(usize),
     CreateList(usize),
+    Add,
+    TextAppend,
+    ListAppend,
+    Equal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Natural(u64),
     String(String),
+    Bool(bool),
     Function(Function),
     Closure(Closure),
     Record(BTreeMap<String, Value>),
@@ -137,4 +141,44 @@ impl Function {
     pub fn new() -> Self {
         Self { arity: 0, chunk: Chunk::new() }
     }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Builtin {
+    NaturalFold,
+    NaturalBuild,
+    NaturalIsZero,
+    NaturalEven,
+    NaturalOdd,
+    NaturalToInteger,
+    NaturalShow,
+    IntegerToDouble,
+    IntegerShow,
+    IntegerNegate,
+    IntegerClamp,
+    NaturalSubtract,
+    DoubleShow,
+    ListBuild,
+    ListFold,
+    ListLength,
+    ListHead,
+    ListLast,
+    ListIndexed,
+    ListReverse,
+    TextShow,
+    TextReplace,
+    Bool,
+    True,
+    False,
+    Optional,
+    None,
+    Natural,
+    Integer,
+    Double,
+    Text,
+    List,
+    Type,
+    Kind,
+    Sort,
 }

@@ -144,7 +144,7 @@ impl Vm {
                     _ => todo!()
                 }
             },
-            Op::Concat => {
+            Op::TextAppend => {
                 let r = self.pop_stack()?;
                 let l = self.pop_stack()?;
                 if let (Value::String(ls), Value::String(rs)) = (l, r) {
@@ -154,7 +154,28 @@ impl Vm {
                         format!("Concatenation is only allowed for Strings.")
                     ))?
                 }
-            }
+            },
+            Op::ListAppend => {
+                let r = self.pop_stack()?;
+                let l = self.pop_stack()?;
+                match (l, r) {
+                    (Value::List(mut li), Value::List(mut ri)) => {
+                        li.append(&mut ri);
+                        self.push_stack(Value::List(li));
+                    },
+                    _ => Err(RuntimeError::Basic(format!("ListAppend expects two lists.")))?
+                }
+            },
+            Op::Equal => {
+                let r = self.pop_stack()?;
+                let l = self.pop_stack()?;
+                match (l, r) {
+                    (Value::Bool(li), Value::Bool(ri)) => {
+                        self.push_stack(Value::Bool(li == ri));
+                    },
+                    _ => Err(RuntimeError::Basic(format!("Equal can only be use on bools.")))?
+                }
+            },
             Op::CreateRecord(n) => {
                 let mut map = BTreeMap::new();
                 for _ in 0..n {

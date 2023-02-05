@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use crate::ast::{Expr, self, Var, Import};
-use crate::bytecode::{Op, Value, Function, UpvalueLoc};
+use crate::bytecode::{Op, Value, Function, UpvalueLoc, Builtin};
 use crate::error::CompileError;
 use crate::{import2, vm};
 
@@ -63,7 +63,6 @@ impl Compiler {
         base_comp.get_function()
     }
 
-
     fn push_compiler(&mut self) {
         self.compilers.push(FunctionCompiler::new());
     }
@@ -89,10 +88,8 @@ impl Compiler {
                             // Dhall imports cannot close over values from importing contexts,
                             // and thus can be precompiled and pre-executed and stored as value to
                             // be pushed directly to the stack.
-                            println!("Compiling {path_string}.");
                             let func = import2::import_file_local(&path)?;
                             println!("Got function {:?}.", func.chunk);
-                            println!("Executing {path_string}.");
                             let val = vm::run_function(func, true).unwrap();
                             let import_idx = vm::add_import_value(path_string, val.clone());
                             println!("Saving value to stash (idx={import_idx}): {val:?}.");
@@ -103,18 +100,12 @@ impl Compiler {
                     _ => todo!("{import:?}"),
                 }
             },
-            Expr::Op(op) => {
-                match op {
-                    ast::Op::Plus(l, r) => {
-                        self.compile(l)?;
-                        self.compile(r)?;
-                        self.emit(Op::Add, 0);
-                    },
-                    _ => todo!(),
-                }
-            },
             Expr::NaturalLit(val) => {
                 let const_idx = self.add_constant(Value::Natural(*val));
+                self.emit(Op::Constant(const_idx), 0);
+            },
+            Expr::BoolLit(val) => {
+                let const_idx = self.add_constant(Value::Bool(*val));
                 self.emit(Op::Constant(const_idx), 0);
             },
             Expr::Text(vec) => {
@@ -131,7 +122,7 @@ impl Compiler {
                     }
                 }
                 for _ in 0..n_slices {
-                    self.emit(Op::Concat, 0)
+                    self.emit(Op::TextAppend, 0)
                 }
             },
             Expr::RecordLit(items) => {
@@ -205,6 +196,34 @@ impl Compiler {
                     ResolvedVar::Upval(idx) => self.emit(Op::GetUpval(idx), 0),
                 }
             },
+
+            // Operations
+
+            Expr::Plus(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::Add, 0);
+            },
+
+            Expr::TextAppend(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::TextAppend, 0);
+            },
+            Expr::ListAppend(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::ListAppend, 0);
+            },
+            Expr::Equal(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::Equal, 0);
+            },
+
+
+
+            // Ignore
             Expr::Annot(e, _) => {
                 self.compile(e)?;
             },
@@ -324,3 +343,6 @@ impl Compiler {
 
 
 }
+
+
+

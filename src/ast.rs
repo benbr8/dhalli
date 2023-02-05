@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use crate::naive_double::NaiveDouble;
+use crate::{naive_double::NaiveDouble, bytecode::Builtin};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var ( pub String, pub usize );  // label, index
@@ -46,8 +46,13 @@ pub enum Expr {
     Application(Vec<Expr>),
 
     // Operations
-    Combine(Box<Expr>, Box<Expr>),
     Op(Op),
+    Plus(Box<Expr>, Box<Expr>),
+    Combine(Box<Expr>, Box<Expr>),
+    TextAppend(Box<Expr>, Box<Expr>),
+    ListAppend(Box<Expr>, Box<Expr>),
+    Equal(Box<Expr>, Box<Expr>),
+
 
     // x : t
     IfThenElse(Box<Expr>, Box<Expr>, Box<Expr>),
@@ -83,42 +88,6 @@ pub enum Op {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Builtin {
-    Bool,
-    Natural,
-    Integer,
-    Double,
-    Text,
-    List,
-    Optional,
-    OptionalNone,
-    Type,
-    Kind,
-    Sort,
-    NaturalBuild,
-    NaturalFold,
-    NaturalIsZero,
-    NaturalEven,
-    NaturalOdd,
-    NaturalToInteger,
-    NaturalShow,
-    NaturalSubtract,
-    IntegerToDouble,
-    IntegerShow,
-    IntegerNegate,
-    IntegerClamp,
-    DoubleShow,
-    ListBuild,
-    ListFold,
-    ListLength,
-    ListHead,
-    ListLast,
-    ListIndexed,
-    ListReverse,
-    TextShow,
-    TextReplace,
-}
 
 pub trait Visitor<T> {
     fn visit_expr(&mut self, expr: &Expr) -> T;

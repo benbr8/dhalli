@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use chumsky::prelude::*;
 
-use crate::{ast::*, naive_double::NaiveDouble};
+use crate::{ast::*, naive_double::NaiveDouble, bytecode::Builtin};
 
 
 macro_rules! padded {
@@ -373,12 +373,6 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just(',')).ignore_then(record_literal_entry).repeated())
             .then_ignore(padded!(just(',')).or_not())
             .map(|(first, mut other)| {
-                // instead of generating one map with every element, create one map for every element and merge them together
-                // this simplifies special patterns like { a.b.c = 1, a.b.d = 2 }
-                // for (name, expr) in other {
-                //     result = Expr::Op(Op::Combine(Box::new(result), Box::new(create_deep_record(&name, expr))));
-                // }
-                // result
                 other.insert(0, first);
                 let mut r = Vec::new();
                 for (s, mut e) in other.drain(..) {
@@ -467,7 +461,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 Expr::Var( if let Some(i) = i { Var(n, i as usize) } else { Var(n, 0) })
             });
 
-        let identifier = variable; // builtin identifiers handled in interpreter?
+        let identifier = builtin().or(variable); // builtin identifiers handled in interpreter?
 
 
         // unions
@@ -563,7 +557,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("==")).ignore_then(not_equal_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::Equal(Box::new(l), Box::new(r)));
+                    l = Expr::Equal(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -617,7 +611,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("#")).ignore_then(and_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::ListAppend(Box::new(l), Box::new(r)));
+                    l = Expr::ListAppend(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -626,7 +620,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("++")).ignore_then(list_append_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::TextAppend(Box::new(l), Box::new(r)));
+                    l = Expr::TextAppend(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -635,7 +629,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(just("+").ignore_then(ws1()).ignore_then(padded!(text_append_expression.clone())).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::Plus(Box::new(l), Box::new(r)));
+                    l = Expr::Plus(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -764,4 +758,56 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .or(assert)
             .or(annotated_expression)
     })).then_ignore(end())
+}
+
+fn builtin() -> impl Parser<char, Expr, Error = Simple<char>> {
+    nonreserved_label().try_map(|s, span| {
+        let b = match s.as_str() {
+            "Natural/Subtract"  => Some(Builtin::NaturalSubtract),
+            "Natural/Fold"      => Some(Builtin::NaturalFold),
+            "Natural/Build"     => Some(Builtin::NaturalBuild),
+            "Natural/IsZero"    => Some(Builtin::NaturalIsZero),
+            "Natural/Even"      => Some(Builtin::NaturalEven),
+            "Natural/Odd"       => Some(Builtin::NaturalOdd),
+            "Natural/ToInteger" => Some(Builtin::NaturalToInteger),
+            "Natural/Show"      => Some(Builtin::NaturalShow),
+            "Integer/ToDouble"  => Some(Builtin::IntegerToDouble),
+            "Integer/Show"      => Some(Builtin::IntegerShow),
+            "Integer/Negate"    => Some(Builtin::IntegerNegate),
+            "Integer/Clamp"     => Some(Builtin::IntegerClamp),
+            "Double/Show"       => Some(Builtin::DoubleShow),
+            "List/Build"        => Some(Builtin::ListBuild),
+            "List/Fold"         => Some(Builtin::ListFold),
+            "List/Length"       => Some(Builtin::ListLength),
+            "List/Head"         => Some(Builtin::ListHead),
+            "List/Last"         => Some(Builtin::ListLast),
+            "List/Indexed"      => Some(Builtin::ListIndexed),
+            "List/Reverse"      => Some(Builtin::ListReverse),
+            "Text/Show"         => Some(Builtin::TextShow),
+            "Text/Replace"      => Some(Builtin::TextReplace),
+            "Bool"              => Some(Builtin::Bool),
+            "True"              => Some(Builtin::True),
+            "False"             => Some(Builtin::False),
+            "Optional"          => Some(Builtin::Optional),
+            "None"              => Some(Builtin::None),
+            "Natural"           => Some(Builtin::Natural),
+            "Integer"           => Some(Builtin::Integer),
+            "Double"            => Some(Builtin::Double),
+            "Text"              => Some(Builtin::Text),
+            "List"              => Some(Builtin::List),
+            "Type"              => Some(Builtin::Type),
+            "Kind"              => Some(Builtin::Kind),
+            "Sort"              => Some(Builtin::Sort),
+            _                   => None,
+        };
+        if let Some(b) = b {
+            match b {
+                Builtin::True => Ok(Expr::BoolLit(true)),
+                Builtin::False => Ok(Expr::BoolLit(false)),
+                _ => Ok(Expr::Builtin(b))
+            }
+        } else {
+            Err(Simple::custom(span, ""))
+        }
+    })
 }
