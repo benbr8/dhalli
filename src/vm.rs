@@ -1,9 +1,41 @@
 
+use std::borrow::BorrowMut;
 use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use crate::bytecode::{Op, Value, Function, Closure, UpvalueLoc, Upvalue, UpvalI};
 use crate::error::RuntimeError;
+
+thread_local! {
+    static IMPORT_VALS: RefCell<Vec<Value>> = RefCell::new(Vec::new());
+    static IMPORT_INDICES: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+}
+
+pub fn add_import_value(name: String, val: Value) -> usize {
+    let idx = IMPORT_VALS.with(|imports| {
+        imports.borrow_mut().push(val);
+        imports.borrow().len() - 1
+    });
+    IMPORT_INDICES.with(|map| {
+        map.borrow_mut().insert(name, idx);
+    });
+    idx
+}
+
+pub fn get_import_index(name: &str) -> Option<usize> {
+    IMPORT_INDICES.with(|map| {
+        map.borrow().get(name).cloned()
+    })
+}
+
+fn get_import_value(import_idx: usize) -> Result<Value, RuntimeError> {
+    IMPORT_VALS.with(|imports| {
+        imports.borrow()
+            .get(import_idx).cloned()
+            .ok_or_else(|| RuntimeError::Basic("Failed to import function".to_string()))
+    })
+}
 
 #[derive(Default)]
 pub struct Vm {
@@ -33,12 +65,19 @@ impl CallFrame {
 }
 
 
+pub fn run_function(function: Function, debug: bool) -> Result<Value, RuntimeError> {
+    let mut vm = Vm::new();
+    vm.debug = debug;
+    vm.run(function)
+}
+
+
 impl Vm {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Vm::default()
     }
 
-    pub fn run(&mut self, function: Function) -> Result<Value, RuntimeError> {
+    fn run(&mut self, function: Function) -> Result<Value, RuntimeError> {
         if self.debug {
             println!("============ FUNCTION ============");
             println!("{:?}", function);
@@ -116,8 +155,24 @@ impl Vm {
                     ))?
                 }
             }
-
-
+            Op::CreateRecord(n) => {
+                let mut map = BTreeMap::new();
+                for _ in 0..n {
+                    let val = self.pop_stack()?;
+                    let name = self.pop_stack()?;
+                    if let Value::String(s) = name {
+                        map.insert(s, val);
+                    }
+                }
+                self.push_stack(Value::Record(map));
+            },
+            Op::CreateList(n) => {
+                let mut list = Vec::new();
+                for _ in 0..n {
+                    list.push(self.pop_stack()?);
+                }
+                self.push_stack(Value::List(list));
+            },
             Op::Constant(const_idx) => self.stack.push(self.func().chunk.get_constant(const_idx)?),
             Op::Closure(const_idx) => {
                 let func = self.func().chunk.get_constant(const_idx)?;
@@ -187,6 +242,9 @@ impl Vm {
                     UpvalI::Closed(val) => val.clone(),
                 };
                 self.push_stack(val);
+            },
+            Op::Import(import_idx) => {
+                self.push_stack(get_import_value(import_idx)?);
             },
             _ => todo!("{:?}", op)
         }

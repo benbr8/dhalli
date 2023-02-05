@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use chumsky::Parser;
-use regex::Regex;
 
 
 mod parse2;
@@ -8,29 +7,27 @@ mod ast;
 // mod interpret;
 // mod env;
 // mod import;
+mod import2;
 mod naive_double;
 mod bytecode;
 mod vm;
 mod compiler;
 mod error;
 
-use bytecode::{Chunk, Op, Value};
-
 
 fn main() {
     let filename = std::env::args().nth(1).expect("no file name given");
-    let path = PathBuf::from(filename);
+    let path = std::fs::canonicalize(PathBuf::from(filename)).unwrap();
     let code = std::fs::read_to_string(&path).unwrap();
     let ast = parse2::dhall_parser().parse(code).unwrap();
     println!("AST:");
     println!("{:?}", &ast);
 
-    let function = compiler::compile(&ast);
+    let function = compiler::compile(&ast, path);
     println!("Function:");
     println!("{:?}", &function);
-    let mut v = vm::Vm::new();
-    v.debug = true;
-    let r = v.run(function.unwrap());
+
+    let r = vm::run_function(function.unwrap(), true);
     println!("{r:#?}");
 }
 

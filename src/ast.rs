@@ -30,7 +30,7 @@ pub enum Expr {
     RecordType(BTreeMap<String, Expr>),
     Record(BTreeMap<String, Expr>),
     // List
-    List(Vec<Expr>),
+    ListLit(Vec<Expr>),
     ListType(Box<Expr>),
     // Union
     UnionType(BTreeMap<String, Option<Expr>>),

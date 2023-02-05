@@ -1,11 +1,14 @@
 
-use crate::ast::{Expr, self};
+use std::path::PathBuf;
+
+use crate::ast::{Expr, self, Var, Import};
 use crate::bytecode::{Op, Value, Function, UpvalueLoc};
-use crate::error::{Error, CompileError};
+use crate::error::CompileError;
+use crate::{import2, vm};
 
 
-pub fn compile(ast: &Expr) -> Result<Function, Error> {
-    let mut compiler = Compiler::new();
+pub fn compile(ast: &Expr, file: PathBuf) -> Result<Function, CompileError> {
+    let mut compiler = Compiler::new(file);
     compiler.compile(ast)?;
     let mut function = compiler.get_function();
     function.chunk.push_op(Op::Return, 0);
@@ -20,6 +23,7 @@ enum ResolvedVar {
 #[derive(Debug, Default)]
 struct Compiler {
     compilers: Vec<FunctionCompiler>,
+    file: PathBuf,
 }
 
 #[derive(Debug)]
@@ -50,8 +54,8 @@ impl FunctionCompiler {
 
 impl Compiler {
 
-    pub fn new() -> Self {
-        Self { compilers: vec![FunctionCompiler::new()] }
+    pub fn new(file: PathBuf) -> Self {
+        Self { compilers: vec![FunctionCompiler::new()], file }
     }
 
     pub fn get_function(mut self) -> Function {
@@ -67,8 +71,38 @@ impl Compiler {
         self.compilers.pop().unwrap()
     }
 
-    pub fn compile(&mut self, ast: &Expr) -> Result<(), Error> {
+    pub fn compile(&mut self, ast: &Expr) -> Result<(), CompileError> {
         match ast {
+            Expr::Import(import) => {
+                match import {
+                    Import::Local(file) => {
+                        let mut file_dir = self.file.clone();
+                        file_dir.pop();
+                        let mut path = file_dir.join(file);
+                        println!("Joined: {path:?}");
+                        path = std::fs::canonicalize(path).unwrap();
+                        let path_string = path.to_string_lossy().to_string();
+                        let import_idx = if let Some(import_idx) = vm::get_import_index(&path_string) {
+                            println!("Getting value from stash (idx={import_idx}): {path_string}.");
+                            import_idx
+                        } else {
+                            // Dhall imports cannot close over values from importing contexts,
+                            // and thus can be precompiled and pre-executed and stored as value to
+                            // be pushed directly to the stack.
+                            println!("Compiling {path_string}.");
+                            let func = import2::import_file_local(&path)?;
+                            println!("Got function {:?}.", func.chunk);
+                            println!("Executing {path_string}.");
+                            let val = vm::run_function(func, true).unwrap();
+                            let import_idx = vm::add_import_value(path_string, val.clone());
+                            println!("Saving value to stash (idx={import_idx}): {val:?}.");
+                            import_idx
+                        };
+                        self.emit(Op::Import(import_idx), 0);
+                    },
+                    _ => todo!("{import:?}"),
+                }
+            },
             Expr::Op(op) => {
                 match op {
                     ast::Op::Plus(l, r) => {
@@ -84,45 +118,54 @@ impl Compiler {
                 self.emit(Op::Constant(const_idx), 0);
             },
             Expr::Text(vec) => {
-                let mut first = true;
+                let mut n_slices = 0;
                 for (s, e) in vec {
-                    println!("{s}, {e:?}");
-                    let const_idx = self.add_constant(Value::String(s.clone()));
-                    self.emit(Op::Constant(const_idx), 0);
+                    // println!("{s}, {e:?}");
+                    if !s.is_empty() {
+                        let const_idx = self.add_constant(Value::String(s.clone()));
+                        self.emit(Op::Constant(const_idx), 0);
+                    }
                     if let Some(e) = e {
                         self.compile(e)?;
-                        self.emit(Op::Concat, 0);
+                        n_slices += 1;
                     }
-                    if !first { self.emit(Op::Concat, 0); }
-                    else { first = false; }
+                }
+                for _ in 0..n_slices {
+                    self.emit(Op::Concat, 0)
                 }
             },
-            // Expr::RecordLit(vec) => {
-            //     let vec = vec.clone()
-            //     self.begin_scope();
-
-
-            // },
+            Expr::RecordLit(items) => {
+                self.begin_scope();
+                for (s, e) in items {
+                    self.compile(e)?;
+                    self.declare_variable(s.clone())?;
+                }
+                for (s, _) in items {
+                    let c = self.add_constant(Value::String(s.clone()));
+                    self.emit(Op::Constant(c), 0);
+                    self.compile(&Expr::Var(Var(s.clone(), 0)))?;
+                }
+                self.emit(Op::CreateRecord(items.len()), 0);
+                self.end_scope_with_result();
+            },
+            Expr::ListLit(items) => {
+                for e in items {
+                    self.compile(e)?;
+                }
+                self.emit(Op::CreateList(items.len()), 0);
+            },
             Expr::LetIn(vec, sub) => {
-                self.push_compiler();
-                self.function().arity = 0;  // let doesn't take arguments
+                self.begin_scope();
                 for (name, _, val) in vec {
-                    // println!("Declaring {name}");
-                    // computed val is on top of stack
+                    if matches!(val, &Expr::RecordType(_)) {
+                        // ignore type definitions
+                        continue;
+                    }
                     self.compile(val)?;
-                    // declare val as variable
                     self.declare_variable(name.clone())?;
                 }
                 self.compile(sub)?;
-                self.emit(Op::Return, 0);
-                let upvalues = self.compiler().upvalues.clone();  // inefficient
-                let func = self.pop_compiler().get_function();
-                let const_idx = self.add_constant(Value::Function(func));
-                self.emit(Op::Closure(const_idx), 0);
-                for upval in upvalues {
-                    self.emit(Op::Upval(upval), 0);
-                }
-                self.emit(Op::Call(0), 0);  // immediately call with 0 args
+                self.end_scope_with_result();
             },
             Expr::Lambda(arg_name, _, expr) => {
                 self.push_compiler();
@@ -162,7 +205,10 @@ impl Compiler {
                     ResolvedVar::Upval(idx) => self.emit(Op::GetUpval(idx), 0),
                 }
             },
-            _ => todo!("ast:?")
+            Expr::Annot(e, _) => {
+                self.compile(e)?;
+            },
+            _ => todo!("{ast:?}")
         };
         Ok(())
     }
@@ -197,6 +243,7 @@ impl Compiler {
                 } else {
                     self.emit(Op::PopBeneath, 0);
                 }
+                self.compiler().locals.pop();
             } else {
                 break;
             }
@@ -205,12 +252,12 @@ impl Compiler {
 
 
     // declaring a (local) variable is as simple as mapping the current stack top to a name
-    fn declare_variable(&mut self, name: String) -> Result<(), Error> {
+    fn declare_variable(&mut self, name: String) -> Result<(), CompileError> {
         let compiler_depth = self.compilers.len()-1;
         let c = self.compiler();
         let local = Local { name, depth: c.scope_depth, is_captured: false };
         if c.locals.contains(&local) {
-            Err(Error::CompileError(CompileError::VarRedefinition(local.name, 0)))
+            Err(CompileError::VarRedefinition(local.name, 0))
         } else {
             println!("Declaring variable {local:?} at index={}, cdepth={}. Locals={:?}", c.locals.len(), compiler_depth, c.locals);
             c.locals.push(local);
@@ -219,7 +266,7 @@ impl Compiler {
     }
 
     // this must only be called in the current compiling
-    fn resolve_variable(&mut self, name: &str) -> Result<ResolvedVar, Error> {
+    fn resolve_variable(&mut self, name: &str) -> Result<ResolvedVar, CompileError> {
         let cidx = self.compilers.len()-1;
         println!("Try Resolving {name} at cidx={cidx}");
 
@@ -230,7 +277,7 @@ impl Compiler {
             if let Some(upval_idx) = self.resolve_upvalue_at_level(name, cidx) {
                 Ok(ResolvedVar::Upval(upval_idx))
             } else {
-                Err(Error::CompileError(CompileError::VarUndefined(name.to_string(), 0)))
+                Err(CompileError::VarUndefined(name.to_string(), 0))
             }
         }
 

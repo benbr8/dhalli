@@ -30,15 +30,14 @@ fn vec_to_string(vec: Vec<char>) -> String {
 }
 
 
-fn create_deep_record(name: &String, expr: Expr) -> Expr {
-    let mut iter = name.split('.').rev();
+fn create_deep_record_lit(name: &String, expr: Expr) -> (String, Expr) {
+    let mut names: Vec<String> = name.split('.').map(|s| s.to_string()).collect();
     let mut e = expr;
-    while let Some(n) = iter.next() {
-        let mut map = BTreeMap::new();
-        map.insert(n.to_string(), e);
-        e = Expr::Record(map);
+    while names.len() > 1 {
+        e = Expr::RecordLit(vec![(names.pop().unwrap(), e)]);
     }
-    e
+
+    (names.pop().unwrap(), e)
 }
 
 fn alphanum() -> impl Parser<char, char, Error = Simple<char>> {
@@ -373,14 +372,24 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         let non_empty_record_literal = record_literal_entry.clone()
             .then(padded!(just(',')).ignore_then(record_literal_entry).repeated())
             .then_ignore(padded!(just(',')).or_not())
-            .map(|(first, other)| {
+            .map(|(first, mut other)| {
                 // instead of generating one map with every element, create one map for every element and merge them together
                 // this simplifies special patterns like { a.b.c = 1, a.b.d = 2 }
-                let mut result = create_deep_record(&first.0, first.1);
-                for (name, expr) in other {
-                    result = Expr::Op(Op::Combine(Box::new(result), Box::new(create_deep_record(&name, expr))));
+                // for (name, expr) in other {
+                //     result = Expr::Op(Op::Combine(Box::new(result), Box::new(create_deep_record(&name, expr))));
+                // }
+                // result
+                other.insert(0, first);
+                let mut r = Vec::new();
+                for (s, mut e) in other.drain(..) {
+                    if s.contains('.') {
+                        let (n, e) = create_deep_record_lit(&s, e);
+                        r.push((n, e));
+                    } else {
+                        r.push((s, e));
+                    }
                 }
-                result
+                Expr::RecordLit(r)
             });
 
         let non_empty_record_type_or_literal =
@@ -407,7 +416,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then_ignore(just(']'))
             .map(|(first, mut others)| {
                 others.insert(0, first);
-                Expr::List(others)
+                Expr::ListLit(others)
             });
 
 
@@ -679,7 +688,8 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 for sn in subnames {
                     name = name + "." + &sn;
                 }
-                create_deep_record(&name, e)
+                let (n, e) = create_deep_record_lit(&name, e);
+                Expr::RecordLit(vec![(n, e)])
             });
 
         let with_expression =
@@ -719,7 +729,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .ignore_then(application_expression.clone())
             .map(|_e| {
                 // Todo: how to handle types of lists?
-                Expr::List(Vec::new())
+                Expr::ListLit(Vec::new())
             });
 
         // assert

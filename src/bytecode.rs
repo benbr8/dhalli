@@ -1,7 +1,7 @@
 
-use std::{rc::Rc, cell::RefCell};
+use std::{rc::Rc, cell::RefCell, collections::BTreeMap};
 
-use crate::error::{Error, RuntimeError};
+use crate::error::RuntimeError;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Chunk {
@@ -12,19 +12,22 @@ pub struct Chunk {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
+    Import(usize),
     Pop,
     PopBeneath,
+    Call(usize), // arg_cnt
     Return,
     Closure(usize),
     Upval(UpvalueLoc), // separate from Closure to not inflate Op too much
     CloseUpvalueBeneath,
     CloseUpvalue(usize),
-    Call(usize), // arg_cnt
     Constant(usize),
     GetVar(usize),
     GetUpval(usize),
     Add,
     Concat,
+    CreateRecord(usize),
+    CreateList(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +36,8 @@ pub enum Value {
     String(String),
     Function(Function),
     Closure(Closure),
+    Record(BTreeMap<String, Value>),
+    List(Vec<Value>),
 }
 
 
