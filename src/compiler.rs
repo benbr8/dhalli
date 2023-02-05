@@ -220,6 +220,31 @@ impl Compiler {
                 self.compile(r)?;
                 self.emit(Op::Equal, 0);
             },
+            Expr::NotEqual(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::NotEqual, 0);
+            },
+            Expr::And(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::And, 0);
+            },
+            Expr::Or(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::Or, 0);
+            },
+            Expr::Combine(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::Combine, 0);
+            },
+            Expr::Prefer(l, r) => {
+                self.compile(l)?;
+                self.compile(r)?;
+                self.emit(Op::Prefer, 0);
+            },
 
 
 

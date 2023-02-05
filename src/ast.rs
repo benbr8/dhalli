@@ -48,10 +48,14 @@ pub enum Expr {
     // Operations
     Op(Op),
     Plus(Box<Expr>, Box<Expr>),
-    Combine(Box<Expr>, Box<Expr>),
     TextAppend(Box<Expr>, Box<Expr>),
     ListAppend(Box<Expr>, Box<Expr>),
     Equal(Box<Expr>, Box<Expr>),
+    NotEqual(Box<Expr>, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
+    Combine(Box<Expr>, Box<Expr>),
+    Prefer(Box<Expr>, Box<Expr>),
 
 
     // x : t

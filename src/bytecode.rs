@@ -31,6 +31,11 @@ pub enum Op {
     TextAppend,
     ListAppend,
     Equal,
+    NotEqual,
+    And,
+    Or,
+    Combine,
+    Prefer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

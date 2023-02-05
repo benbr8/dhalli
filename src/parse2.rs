@@ -548,7 +548,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("!=")).ignore_then(application_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::NotEqual(Box::new(l), Box::new(r)));
+                    l = Expr::NotEqual(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -584,7 +584,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("//")).ignore_then(combine_types_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::Prefer(Box::new(l), Box::new(r)));
+                    l = Expr::Prefer(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -593,7 +593,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("/\\")).ignore_then(prefer_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::Combine(Box::new(l), Box::new(r)));
+                    l = Expr::Combine(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -602,7 +602,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("&&")).ignore_then(combine_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::And(Box::new(l), Box::new(r)));
+                    l = Expr::And(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -638,7 +638,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             .then(padded!(just("||")).ignore_then(plus_expression.clone()).repeated())
             .map(|(mut l, vec)| {
                 for r in vec {
-                    l = Expr::Op(Op::Or(Box::new(l), Box::new(r)));
+                    l = Expr::Or(Box::new(l), Box::new(r));
                 }
                 l
             }));
@@ -691,7 +691,8 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             import_expression.clone().then(ws().ignore_then(just("with")).ignore_then(ws1()).ignore_then(with_clause).repeated().at_least(1))
             .map(|(mut e, with_vec): (Expr, Vec<Expr>)| {
                 for expr in with_vec {
-                    e = Expr::Op(Op::Prefer(Box::new(e), Box::new(expr)));
+                    e = Expr::Prefer(Box::new(e), Box::new(expr));
+                    todo!("Check if deep record creation case possible");
                 }
                 e
             });

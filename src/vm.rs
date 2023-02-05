@@ -173,7 +173,56 @@ impl Vm {
                     (Value::Bool(li), Value::Bool(ri)) => {
                         self.push_stack(Value::Bool(li == ri));
                     },
-                    _ => Err(RuntimeError::Basic(format!("Equal can only be use on bools.")))?
+                    _ => Err(RuntimeError::Basic(format!("Equal can only be used on bools.")))?
+                }
+            },
+            Op::NotEqual => {
+                let r = self.pop_stack()?;
+                let l = self.pop_stack()?;
+                match (l, r) {
+                    (Value::Bool(li), Value::Bool(ri)) => {
+                        self.push_stack(Value::Bool(li != ri));
+                    },
+                    _ => Err(RuntimeError::Basic(format!("NotEqual can only be used on bools.")))?
+                }
+            },
+            Op::And => {
+                let r = self.pop_stack()?;
+                let l = self.pop_stack()?;
+                match (l, r) {
+                    (Value::Bool(li), Value::Bool(ri)) => {
+                        self.push_stack(Value::Bool(li && ri));
+                    },
+                    _ => Err(RuntimeError::Basic(format!("And can only be used on bools.")))?
+                }
+            },
+            Op::Or => {
+                let r = self.pop_stack()?;
+                let l = self.pop_stack()?;
+                match (l, r) {
+                    (Value::Bool(li), Value::Bool(ri)) => {
+                        self.push_stack(Value::Bool(li || ri));
+                    },
+                    _ => Err(RuntimeError::Basic(format!("Or can only be used on bools.")))?
+                }
+            },
+            Op::Combine => {
+                let mut r = self.pop_stack()?;
+                let mut l = self.pop_stack()?;
+                combine_record(&mut l, &mut r)?;
+                self.push_stack(l);
+            },
+            Op::Prefer => {
+                let r = self.pop_stack()?;
+                let mut l = self.pop_stack()?;
+                match (&mut l, r) {
+                    (Value::Record(li), Value::Record(ri)) => {
+                        for (k, v) in ri {
+                            li.insert(k.clone(), v.clone());
+                        }
+                        self.push_stack(l);
+                    },
+                    _ => Err(RuntimeError::Basic(format!("Prefer expression can only be used on records.")))?
                 }
             },
             Op::CreateRecord(n) => {
@@ -338,5 +387,21 @@ impl Vm {
             let target = self.upvalues.remove(j);
             target.replace(UpvalI::Closed(val));
         }
+    }
+}
+
+
+fn combine_record(l: &mut Value, r: &mut Value) -> Result<(), RuntimeError> {
+    if let (Value::Record(li), Value::Record(ri)) = (l, r) {
+        for (name, val) in ri {
+            if let Some(left) = li.get_mut(name) {
+                combine_record(left, val)?;
+            } else {
+                li.insert(name.clone(), val.clone());  // TODO: there must be a way to transfer ownership instead?
+            }
+        }
+        Ok(())
+    } else {
+        Err(RuntimeError::Basic("Combine expression can only be usedd with records.".to_string()))
     }
 }
