@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use crate::ast::{Expr, self, Var, Import};
-use crate::bytecode::{Op, Value, Function, UpvalueLoc, Builtin};
+use crate::bytecode::{Op, Value, Function, UpvalueLoc, Builtin, builtin_fn_args};
 use crate::error::CompileError;
 use crate::{import2, vm};
 
@@ -104,6 +104,10 @@ impl Compiler {
                 let const_idx = self.add_constant(Value::Natural(*val));
                 self.emit(Op::Constant(const_idx), 0);
             },
+            Expr::IntegerLit(val) => {
+                let const_idx = self.add_constant(Value::Integer(*val));
+                self.emit(Op::Constant(const_idx), 0);
+            },
             Expr::BoolLit(val) => {
                 let const_idx = self.add_constant(Value::Bool(*val));
                 self.emit(Op::Constant(const_idx), 0);
@@ -180,13 +184,35 @@ impl Compiler {
             Expr::Application(vec) => {
                 // parser ensures length of vector is at least 2
                 println!("Compiling application: {vec:?}");
-                let first = vec.len()-1;
-                self.compile(&vec[first])?;
-                for j in (0..first).rev() {
-                    self.compile(&vec[j])?;
-                    self.emit(Op::Call(1), 0);
-                }
+                // let first = vec.len()-1;
+                // self.compile(&vec[first])?;
+                // for j in (0..first).rev() {
+                //     self.compile(&vec[j])?;
+                //     self.emit(Op::Call(1), 0);
+                // }
 
+                let len = vec.len();
+                let mut j = 1;
+                self.compile(&vec[0])?;
+                while j < len {
+                    if let Op::Builtin(b) = self.peek_op() {
+                        // If function to be applied is to be a builtin, compile its arguments then Call(nargs)
+                        // Check that nargs does not exceed remaining items in call vector
+                        let n_args = builtin_fn_args(b)?;
+                        if n_args > len - j {
+                            Err(CompileError::Basic(format!("Less arguments then expected for builtin {b:?}: {} instead of {n_args}", j+1)))?
+                        }
+                        for _ in 0..n_args {
+                            self.compile(&vec[j])?;
+                            j += 1;
+                        }
+                        self.emit(Op::Call(n_args), 0);
+                    } else {
+                        self.compile(&vec[j])?;
+                        j += 1;
+                        self.emit(Op::Call(1), 0);
+                    }
+                }
             },
             Expr::Var(var) => {
                 // TODO: x@2
@@ -247,6 +273,42 @@ impl Compiler {
             },
 
 
+            // Builtin
+            Expr::Builtin(b) => {
+                match b {
+                    Builtin::NaturalSubtract
+                    | Builtin::NaturalFold
+                    | Builtin::NaturalBuild
+                    | Builtin::NaturalIsZero
+                    | Builtin::NaturalEven
+                    | Builtin::NaturalOdd
+                    | Builtin::NaturalToInteger
+                    | Builtin::NaturalShow
+                    | Builtin::IntegerToDouble
+                    | Builtin::IntegerShow
+                    | Builtin::IntegerNegate
+                    | Builtin::IntegerClamp
+                    | Builtin::DoubleShow
+                    | Builtin::ListBuild
+                    | Builtin::ListFold
+                    | Builtin::ListLength
+                    | Builtin::ListHead
+                    | Builtin::ListLast
+                    | Builtin::ListIndexed
+                    | Builtin::ListReverse
+                    | Builtin::TextShow
+                    | Builtin::TextReplace
+                        => self.emit(Op::Builtin(b.clone()), 0),
+                    _ => todo!("{b:?}"),
+                }
+            },
+            Expr::Some(e) => {
+                // wrap some value in Some by using builtin function mechanism
+                self.emit(Op::Builtin(Builtin::Some), 0);
+                self.compile(e)?;
+                self.emit(Op::Call(1), 0);
+            },
+
 
             // Ignore
             Expr::Annot(e, _) => {
@@ -269,6 +331,12 @@ impl Compiler {
     fn emit(&mut self, op: Op, span: usize) {
         self.function().chunk.push_op(op, span);
     }
+    fn emit_below(&mut self, depth: usize, op: Op, span: usize) {
+        self.function().chunk.push_op_below(depth, op, span);
+    }
+    fn peek_op(&mut self) -> &Op {
+        self.function().chunk.peek_op()
+    }
 
     fn add_constant(&mut self, val: Value) -> usize {
         self.function().chunk.add_constant(val)
@@ -279,7 +347,8 @@ impl Compiler {
     }
     fn end_scope_with_result(&mut self) {
         self.compiler().scope_depth -= 1;
-        // for j in (self.compiler().locals.len()-1)..0 {
+
+        // TODO: this could be optimized by selectively closing, and then popping the rest in one go
         for j in (0..self.compiler().locals.len()).rev() {
             if self.compiler().locals[j].depth > self.compiler().scope_depth {
                 if self.compiler().locals[j].is_captured {

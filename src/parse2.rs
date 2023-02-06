@@ -538,8 +538,7 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 if e2.is_empty() {
                     e1
                 } else {
-                    e2.reverse(); // newest will be at the end for efficient popping
-                    e2.push(e1);
+                    e2.insert(0, e1);
                     Expr::Application(e2)
                 }
             }));
@@ -764,28 +763,28 @@ pub fn dhall_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
 fn builtin() -> impl Parser<char, Expr, Error = Simple<char>> {
     nonreserved_label().try_map(|s, span| {
         let b = match s.as_str() {
-            "Natural/Subtract"  => Some(Builtin::NaturalSubtract),
-            "Natural/Fold"      => Some(Builtin::NaturalFold),
-            "Natural/Build"     => Some(Builtin::NaturalBuild),
-            "Natural/IsZero"    => Some(Builtin::NaturalIsZero),
-            "Natural/Even"      => Some(Builtin::NaturalEven),
-            "Natural/Odd"       => Some(Builtin::NaturalOdd),
-            "Natural/ToInteger" => Some(Builtin::NaturalToInteger),
-            "Natural/Show"      => Some(Builtin::NaturalShow),
-            "Integer/ToDouble"  => Some(Builtin::IntegerToDouble),
-            "Integer/Show"      => Some(Builtin::IntegerShow),
-            "Integer/Negate"    => Some(Builtin::IntegerNegate),
-            "Integer/Clamp"     => Some(Builtin::IntegerClamp),
-            "Double/Show"       => Some(Builtin::DoubleShow),
-            "List/Build"        => Some(Builtin::ListBuild),
-            "List/Fold"         => Some(Builtin::ListFold),
-            "List/Length"       => Some(Builtin::ListLength),
-            "List/Head"         => Some(Builtin::ListHead),
-            "List/Last"         => Some(Builtin::ListLast),
-            "List/Indexed"      => Some(Builtin::ListIndexed),
-            "List/Reverse"      => Some(Builtin::ListReverse),
-            "Text/Show"         => Some(Builtin::TextShow),
-            "Text/Replace"      => Some(Builtin::TextReplace),
+            "Natural/subtract"  => Some(Builtin::NaturalSubtract),
+            "Natural/fold"      => Some(Builtin::NaturalFold),
+            "Natural/build"     => Some(Builtin::NaturalBuild),
+            "Natural/isZero"    => Some(Builtin::NaturalIsZero),
+            "Natural/even"      => Some(Builtin::NaturalEven),
+            "Natural/odd"       => Some(Builtin::NaturalOdd),
+            "Natural/toInteger" => Some(Builtin::NaturalToInteger),
+            "Natural/show"      => Some(Builtin::NaturalShow),
+            "Integer/toDouble"  => Some(Builtin::IntegerToDouble),
+            "Integer/show"      => Some(Builtin::IntegerShow),
+            "Integer/negate"    => Some(Builtin::IntegerNegate),
+            "Integer/clamp"     => Some(Builtin::IntegerClamp),
+            "Double/show"       => Some(Builtin::DoubleShow),
+            "List/build"        => Some(Builtin::ListBuild),
+            "List/fold"         => Some(Builtin::ListFold),
+            "List/length"       => Some(Builtin::ListLength),
+            "List/head"         => Some(Builtin::ListHead),
+            "List/last"         => Some(Builtin::ListLast),
+            "List/indexed"      => Some(Builtin::ListIndexed),
+            "List/reverse"      => Some(Builtin::ListReverse),
+            "Text/show"         => Some(Builtin::TextShow),
+            "Text/replace"      => Some(Builtin::TextReplace),
             "Bool"              => Some(Builtin::Bool),
             "True"              => Some(Builtin::True),
             "False"             => Some(Builtin::False),

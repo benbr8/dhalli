@@ -29,6 +29,8 @@ pub enum CompileError {
     VarRedefinition(String, usize),     // varname, span
     #[error("Trying to access undefined variable: {0}.")]
     VarUndefined(String, usize),     // varname, span
-    #[error("Scope underflow. This should not be possible")]
-    ScopeError,
+    #[error("Internal error (this is probably a bug): {0}")]
+    InternalBug(String),
+    #[error("Internal error (this is probably a bug): {0}")]
+    Basic(String),
 }

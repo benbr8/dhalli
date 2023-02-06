@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use crate::bytecode::{Op, Value, Function, Closure, UpvalueLoc, Upvalue, UpvalI};
+use crate::bytecode::{Op, Value, Function, Closure, UpvalueLoc, Upvalue, UpvalI, Builtin};
 use crate::error::RuntimeError;
 
 thread_local! {
@@ -111,9 +111,6 @@ impl Vm {
     fn call(&mut self, nargs: usize) -> Result<(), RuntimeError> {
         let func_val = self.peek_stack(nargs)?;
         match func_val {
-            // Value::Function(func) => {
-            //     self.push_frame(func.clone(), self.stack.len()-nargs-1);  // clone is bad... lets hope for GC
-            // },
             Value::Closure(closure) => {
                 if closure.func.arity as usize != nargs {
                     Err(RuntimeError::InternalBug("Wrong number of arguments passed into closure.".to_string()))?
@@ -140,7 +137,6 @@ impl Vm {
                 match (l, r) {
                     (Value::Natural(l), Value::Natural(r)) =>
                         self.push_stack(Value::Natural(l + r)),
-
                     _ => todo!()
                 }
             },
@@ -275,7 +271,11 @@ impl Vm {
                 self.push_stack(Value::Closure(closure));
             },
             Op::Call(nargs) => {
-                self.call(nargs)?;
+                if let Value::Builtin(b) = self.peek_stack(nargs)?.clone() {
+                    self.apply_builtin_fn(&b)?;
+                } else {
+                    self.call(nargs)?;
+                }
             },
             Op::CloseUpvalue(idx) => {
                 // println!("Lifting upvalue {idx}");
@@ -316,10 +316,112 @@ impl Vm {
             Op::Import(import_idx) => {
                 self.push_stack(get_import_value(import_idx)?);
             },
+            Op::Builtin(b) => {
+                self.push_stack(Value::Builtin(b));
+            },
             _ => todo!("{:?}", op)
         }
         if self.debug {
             self.print_stack();
+        }
+        Ok(())
+    }
+
+    fn apply_builtin_fn(&mut self, b: &Builtin) -> Result<(), RuntimeError> {
+        match b {
+
+            Builtin::Some => {
+                let val = self.pop_stack()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::Option(Some(Box::new(val))));
+            },
+            Builtin::NaturalOdd => {
+                let val = self.pop_stack()?.assume_natural()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::Bool(val % 2 == 1));
+            },
+            Builtin::NaturalEven => {
+                let val = self.pop_stack()?.assume_natural()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::Bool(val % 2 == 0));
+            },
+            Builtin::NaturalIsZero => {
+                let val = self.pop_stack()?.assume_natural()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::Bool(val == 0));
+            },
+            Builtin::NaturalToInteger => {
+                let val = self.pop_stack()?.assume_natural()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::Integer(val as i64));
+            },
+            Builtin::NaturalSubtract => {
+                let from = self.pop_stack()?.assume_natural()?;
+                let this = self.pop_stack()?.assume_natural()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                let r = if this >= from { 0 } else { from - this };
+                self.push_stack(Value::Natural(r));
+            },
+            Builtin::NaturalShow => {
+                let val = self.pop_stack()?.assume_natural()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::String(format!("{val}")));
+            },
+            // Builtin::NaturalFold => ,
+            // Builtin::NaturalBuild => ,
+            Builtin::IntegerNegate => {
+                let val = self.pop_stack()?.assume_integer()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::Integer(-val));
+            },
+            Builtin::IntegerClamp => {
+                let val = self.pop_stack()?.assume_integer()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                let r = if val < 0 { 0 } else { val as u64 };
+                self.push_stack(Value::Natural(r));
+            },
+            Builtin::IntegerShow => {
+                let val = self.pop_stack()?.assume_integer()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::String(format!("{val}")));
+            },
+            // Builtin::IntegerToDouble => ,
+            Builtin::TextReplace => {
+                let text = self.pop_stack()?.assume_string()?;
+                let replacement = self.pop_stack()?.assume_string()?;
+                let pattern = self.pop_stack()?.assume_string()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::String(text.replace(&pattern, &replacement)));
+            },
+            // Builtin::TextShow => ,
+            Builtin::ListLength => {
+                let val = self.pop_stack()?.assume_list()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                self.push_stack(Value::Natural(val.len() as u64));
+            },
+            Builtin::ListReverse => {
+                let mut val = self.pop_stack()?.assume_list()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                val.reverse();
+                self.push_stack(Value::List(val));
+            },
+            Builtin::ListHead => {
+                let val = self.pop_stack()?.assume_list()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                let r = if !val.is_empty() {
+                    Some(Box::new(val[0].clone()))
+                } else { None };
+                self.push_stack(Value::Option(r));
+            },
+            Builtin::ListLast => {
+                let mut val = self.pop_stack()?.assume_list()?;
+                let _ = self.pop_stack()?;  // remove Value::Builtin
+                let r = if !val.is_empty() {
+                    Some(Box::new(val.pop().unwrap()))
+                } else { None };
+                self.push_stack(Value::Option(r));
+            },
+            _ => todo!("{b:?}")
         }
         Ok(())
     }
